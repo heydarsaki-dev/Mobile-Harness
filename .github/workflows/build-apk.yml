@@ -30,15 +30,13 @@ jobs:
       - name: Install zstd
         run: sudo apt-get update && sudo apt-get install -y zstd
 
-      - name: Install Android SDK packages
-        uses: android-actions/setup-android@v3
-        with:
-          cmdline-tools-version: 11076708
+      - name: Accept SDK licenses
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
 
       - name: Install NDK and CMake
         run: |
           sdkmanager --install "ndk;26.1.10909125" "cmake;3.22.1"
-          sdkmanager --licenses <<< "y"
 
       - name: Build Antigravity runtime bundle
         run: |
