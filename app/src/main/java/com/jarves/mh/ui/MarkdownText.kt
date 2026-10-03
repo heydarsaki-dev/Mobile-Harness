@@ -83,7 +83,7 @@ fun MarkdownText(
         blocks.forEach { block ->
             when (block) {
                 is MarkdownBlock.Header -> HeaderBlock(block, textAlign)
-                is MarkdownBlock.CodeBlock -> CodeSnippetBlock(block, onRunCode)
+                is MarkdownBlock.CodeBlock -> CodeSnippetBlock(block, onRunCode, align)
                 is MarkdownBlock.BulletItem -> BulletBlock(block, color, textAlign)
                 is MarkdownBlock.NumberedItem -> NumberedBlock(block, color, textAlign)
                 is MarkdownBlock.BlockQuote -> QuoteBlock(block, textAlign)
@@ -210,10 +210,11 @@ private fun QuoteBlock(quote: MarkdownBlock.BlockQuote, textAlign: TextAlign) {
 }
 
 @Composable
-private fun CodeSnippetBlock(block: MarkdownBlock.CodeBlock, onRunCode: ((String) -> Unit)?) {
+private fun CodeSnippetBlock(block: MarkdownBlock.CodeBlock, onRunCode: ((String) -> Unit)?, align: ChatTextAlign) {
     val clipboard = LocalClipboardManager.current
     var copied by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val textAlign = remember(align) { chatTextAlign(align) }
 
     Surface(
         shape = RoundedCornerShape(12.dp),
@@ -289,7 +290,7 @@ private fun CodeSnippetBlock(block: MarkdownBlock.CodeBlock, onRunCode: ((String
                         fontSize = 13.sp,
                         lineHeight = 19.sp,
                         color = Color(0xFFE2E8F0),
-                        textAlign = TextAlign.Start,
+                        textAlign = textAlign,
                         style = TextStyle(textDirection = TextDirection.Ltr),
                     )
                 }

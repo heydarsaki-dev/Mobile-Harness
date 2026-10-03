@@ -4542,7 +4542,7 @@ private fun ChatTab(
             ) {
                 items(messages, key = { it.id }) { message ->
                     if (message.workItems.isNotEmpty()) {
-                        WorkBlockCard(message)
+                        WorkBlockCard(message, textAlign)
                     } else {
                         MessageBubble(message, textAlign, onRunInTerminal, onOpenAttachment)
                     }
@@ -4781,17 +4781,21 @@ private fun LiveClaudeProcess(
 }
 
 @Composable
-private fun WorkBlockCard(message: ChatMessage) {
+private fun WorkBlockCard(message: ChatMessage, textAlign: ChatTextAlign) {
+    val align = remember(textAlign) { chatTextAlign(textAlign) }
     val seconds = (message.workedMillis / 1_000L).coerceAtLeast(1L)
     Column {
         ClaudeActivityDisclosure(
             items = message.workItems,
             headline = activityHeadline(message.workItems, seconds, message.workItems.isEmpty()),
+            textAlign = textAlign,
         )
         if (message.workItems.lastOrNull()?.title?.startsWith("Task stopped") == true) {
             Text(
                 text = "Worked for ${formatDuration(seconds)}",
                 modifier = Modifier.padding(start = 29.dp, bottom = 6.dp),
+                textAlign = align,
+                style = TextStyle(textDirection = ChatTextDirection),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 11.sp,
             )
@@ -4804,6 +4808,7 @@ private fun ClaudeActivityDisclosure(
     items: List<ActivityItem>,
     headline: String,
     isRunning: Boolean = false,
+    textAlign: ChatTextAlign = ChatTextAlign.START,
 ) {
     var expandedItems by rememberSaveable { mutableStateOf(emptyList<Int>()) }
     Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp)) {
@@ -4817,7 +4822,7 @@ private fun ClaudeActivityDisclosure(
                     expandedItems = if (0 in expandedItems) expandedItems - 0 else expandedItems + 0
                 },
             )
-            if (0 in expandedItems) ActivityExpandedDetail(null, "Reviewing the request and planning the next action.")
+            if (0 in expandedItems) ActivityExpandedDetail(null, "Reviewing the request and planning the next action.", textAlign)
         } else {
             items.forEachIndexed { index, item ->
                 ActivitySummaryRow(
@@ -4829,7 +4834,7 @@ private fun ClaudeActivityDisclosure(
                         expandedItems = if (index in expandedItems) expandedItems - index else expandedItems + index
                     },
                 )
-                if (index in expandedItems) ActivityExpandedDetail(item, activityDetail(item))
+                if (index in expandedItems) ActivityExpandedDetail(item, activityDetail(item), textAlign)
             }
         }
     }
@@ -5019,7 +5024,7 @@ private fun activityIcon(item: ActivityItem?): ImageVector {
 }
 
 @Composable
-private fun ActivityExpandedDetail(item: ActivityItem?, detail: String) {
+private fun ActivityExpandedDetail(item: ActivityItem?, detail: String, textAlign: ChatTextAlign) {
     if (item?.isCommand == true) {
         Text(
             detail,
@@ -5030,6 +5035,8 @@ private fun ActivityExpandedDetail(item: ActivityItem?, detail: String) {
             lineHeight = 17.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontFamily = FontFamily.Monospace,
+            textAlign = chatTextAlign(textAlign),
+            style = TextStyle(textDirection = ChatTextDirection),
         )
     } else {
         MarkdownText(
@@ -5038,6 +5045,7 @@ private fun ActivityExpandedDetail(item: ActivityItem?, detail: String) {
                 .fillMaxWidth()
                 .padding(start = 25.dp, end = 8.dp, bottom = 8.dp),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            align = textAlign,
         )
     }
 }
@@ -5148,6 +5156,8 @@ private fun MessageBubble(
                     Text(
                         text = "Worked for ${formatDuration((message.workedMillis / 1_000L).coerceAtLeast(1L))}",
                         modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 6.dp, bottom = 10.dp),
+                        textAlign = bubbleAlign,
+                        style = TextStyle(textDirection = ChatTextDirection),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 11.sp,
                     )
