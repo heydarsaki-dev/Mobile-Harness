@@ -109,22 +109,50 @@ jobs:
           chmod +x scripts/runtime-bundles/build-agy-from-official.sh
           scripts/runtime-bundles/build-agy-from-official.sh
 
+      # The keystore lives in the Actions cache so every rebuild after the first
+      # one is signed with the same key, which is what lets Android accept an
+      # update over an already-installed build.
+      - name: Restore signing keystore
+        id: keystore-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: signing
+          key: mh-release-keystore-v1
+
       - name: Create signing keystore
+        if: steps.keystore-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euo pipefail
-          # Throwaway key: the keystore is never published, only the signed APK.
-          pw="$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 28)"
+          mkdir -p signing
+          pw="$(head -c 48 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 32)"
+          printf '%s' "$pw" > signing/password.txt
+          keytool -genkeypair -v -keystore signing/release.jks -storetype PKCS12 \
+            -storepass "$pw" -keypass "$pw" -alias mobileharness \
+            -keyalg RSA -keysize 4096 -validity 10950 \
+            -dname "CN=Mobile Harness, OU=Release Signing, O=heydarsaki-dev, C=US"
+
+      - name: Persist signing keystore
+        if: steps.keystore-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: signing
+          key: mh-release-keystore-v1
+
+      - name: Export signing credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          pw="$(cat signing/password.txt)"
           {
-            echo "MH_UPLOAD_STORE_FILE=release.jks"
+            echo "MH_UPLOAD_STORE_FILE=signing/release.jks"
             echo "MH_UPLOAD_KEY_ALIAS=mobileharness"
             echo "MH_UPLOAD_STORE_PASSWORD=$pw"
             echo "MH_UPLOAD_KEY_PASSWORD=$pw"
           } >> "$GITHUB_ENV"
-          keytool -genkeypair -v -keystore release.jks -storetype JKS \
-            -storepass "$pw" -keypass "$pw" -alias mobileharness \
-            -keyalg RSA -keysize 4096 -validity 10950 \
-            -dname "CN=Mobile Harness, OU=CI Build, O=Mobile Harness, C=US"
+          echo "signing certificate in use:"
+          keytool -list -v -keystore signing/release.jks -storepass "$pw" -alias mobileharness \
+            | grep -E "Owner|Valid from"
 
       - name: Build APK
         run: ./gradlew --no-daemon assembleOnlineRelease
