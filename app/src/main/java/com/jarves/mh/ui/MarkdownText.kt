@@ -27,6 +27,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,14 +38,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jarves.mh.ui.theme.PocketOrange
@@ -84,8 +89,12 @@ fun MarkdownText(
                 )
                 is MarkdownBlock.Paragraph -> {
                     Text(
-                        text = formatInlineMarkdown(block.text),
-                        style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 22.sp),
+                        text = formatInlineMarkdown(isolateLtrRuns(block.text)),
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            lineHeight = 22.sp,
+                            textAlign = TextAlign.Start,
+                            textDirection = messageTextDirection(block.text),
+                        ),
                         color = color,
                     )
                 }
@@ -102,8 +111,11 @@ private fun HeaderBlock(header: MarkdownBlock.Header) {
         else -> MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
     }
     Text(
-        text = formatInlineMarkdown(header.text),
-        style = style,
+        text = formatInlineMarkdown(isolateLtrRuns(header.text)),
+        style = style.copy(
+            textAlign = TextAlign.Start,
+            textDirection = messageTextDirection(header.text),
+        ),
         color = MaterialTheme.colorScheme.onSurface,
         modifier = Modifier.padding(top = 4.dp),
     )
@@ -124,8 +136,12 @@ private fun BulletBlock(item: MarkdownBlock.BulletItem, color: Color) {
                 .background(PocketOrange, CircleShape),
         )
         Text(
-            text = formatInlineMarkdown(item.text),
-            style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 22.sp),
+            text = formatInlineMarkdown(isolateLtrRuns(item.text)),
+            style = MaterialTheme.typography.bodyMedium.copy(
+                lineHeight = 22.sp,
+                textAlign = TextAlign.Start,
+                textDirection = messageTextDirection(item.text),
+            ),
             color = color,
             modifier = Modifier.weight(1f),
         )
@@ -140,12 +156,20 @@ private fun NumberedBlock(item: MarkdownBlock.NumberedItem, color: Color) {
     ) {
         Text(
             text = item.number,
-            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold, color = PocketOrange),
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontWeight = FontWeight.Bold,
+                color = PocketOrange,
+                textDirection = TextDirection.Ltr,
+            ),
             modifier = Modifier.padding(end = 6.dp),
         )
         Text(
-            text = formatInlineMarkdown(item.text),
-            style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 22.sp),
+            text = formatInlineMarkdown(isolateLtrRuns(item.text)),
+            style = MaterialTheme.typography.bodyMedium.copy(
+                lineHeight = 22.sp,
+                textAlign = TextAlign.Start,
+                textDirection = messageTextDirection(item.text),
+            ),
             color = color,
             modifier = Modifier.weight(1f),
         )
@@ -170,10 +194,12 @@ private fun QuoteBlock(quote: MarkdownBlock.BlockQuote) {
         )
         Spacer(Modifier.width(10.dp))
         Text(
-            text = formatInlineMarkdown(quote.text),
+            text = formatInlineMarkdown(isolateLtrRuns(quote.text)),
             style = MaterialTheme.typography.bodyMedium.copy(
                 fontStyle = FontStyle.Italic,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Start,
+                textDirection = messageTextDirection(quote.text),
             ),
         )
     }
@@ -243,19 +269,26 @@ private fun CodeSnippetBlock(block: MarkdownBlock.CodeBlock, onRunCode: ((String
                     }
                 }
             }
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(12.dp),
-            ) {
-                Text(
-                    text = block.code,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 13.sp,
-                    lineHeight = 19.sp,
-                    color = Color(0xFFE2E8F0),
-                )
+            // Source code always reads left to right, so keep the scroll
+            // direction and the text direction left to right even when the
+            // surrounding message is Persian.
+            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(12.dp),
+                ) {
+                    Text(
+                        text = block.code,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 13.sp,
+                        lineHeight = 19.sp,
+                        color = Color(0xFFE2E8F0),
+                        textAlign = TextAlign.Start,
+                        textDirection = TextDirection.Ltr,
+                    )
+                }
             }
         }
     }

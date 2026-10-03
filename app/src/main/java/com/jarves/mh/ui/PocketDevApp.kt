@@ -144,6 +144,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -162,6 +163,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -171,7 +173,9 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -5025,49 +5029,61 @@ private fun formatDuration(totalSeconds: Long): String = when {
 
 @Composable
 private fun MessageBubble(message: ChatMessage, onRunInTerminal: (String) -> Unit, onOpenAttachment: (ChatAttachment) -> Unit) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.fromUser) Arrangement.End else Arrangement.Start) {
-        Surface(
-            color = if (message.fromUser) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
-            shape = RoundedCornerShape(18.dp),
-            modifier = Modifier.fillMaxWidth(if (message.fromUser) .82f else .92f),
-        ) {
-            Column(Modifier.padding(top = 12.dp)) {
-                SelectionContainer {
-                    if (message.fromUser) {
-                        Text(
-                            text = message.text,
-                            modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 8.dp),
-                            style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 22.sp),
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        )
-                    } else {
-                        MarkdownText(
-                            markdown = message.text,
-                            modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 8.dp),
-                            color = MaterialTheme.colorScheme.onSurface,
-                            onRunCode = onRunInTerminal,
-                        )
-                    }
-                }
-                if (!message.fromUser && message.workedMillis > 0L) {
-                    Text(
-                        text = "Worked for ${formatDuration((message.workedMillis / 1_000L).coerceAtLeast(1L))}",
-                        modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 6.dp, bottom = 10.dp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontSize = 11.sp,
-                    )
-                }
-                if (message.attachments.isNotEmpty()) {
-                    Column(
-                        Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        message.attachments.forEach { attachment ->
-                            AttachmentChip(attachment = attachment, onOpen = { onOpenAttachment(attachment) }, onRemove = null)
+    // Persian messages get their own right-to-left layout so they start on the
+    // right edge of the screen whatever the device locale is.
+    val layoutDirection = remember(message.text) { messageLayoutDirection(message.text) }
+    val textDirection = remember(message.text) { messageTextDirection(message.text) }
+    val preparedText = remember(message.text) { isolateLtrRuns(message.text) }
+
+    CompositionLocalProvider(LocalLayoutDirection provides layoutDirection) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.fromUser) Arrangement.End else Arrangement.Start) {
+            Surface(
+                color = if (message.fromUser) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier.fillMaxWidth(if (message.fromUser) .82f else .92f),
+            ) {
+                Column(Modifier.padding(top = 12.dp)) {
+                    SelectionContainer {
+                        if (message.fromUser) {
+                            Text(
+                                text = preparedText,
+                                modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 8.dp),
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    lineHeight = 22.sp,
+                                    textAlign = TextAlign.Start,
+                                    textDirection = textDirection,
+                                ),
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            )
+                        } else {
+                            MarkdownText(
+                                markdown = message.text,
+                                modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 8.dp),
+                                color = MaterialTheme.colorScheme.onSurface,
+                                onRunCode = onRunInTerminal,
+                            )
                         }
                     }
+                    if (!message.fromUser && message.workedMillis > 0L) {
+                        Text(
+                            text = "Worked for ${formatDuration((message.workedMillis / 1_000L).coerceAtLeast(1L))}",
+                            modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 6.dp, bottom = 10.dp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 11.sp,
+                        )
+                    }
+                    if (message.attachments.isNotEmpty()) {
+                        Column(
+                            Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            message.attachments.forEach { attachment ->
+                                AttachmentChip(attachment = attachment, onOpen = { onOpenAttachment(attachment) }, onRemove = null)
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(4.dp))
                 }
-                Spacer(Modifier.height(4.dp))
             }
         }
     }
