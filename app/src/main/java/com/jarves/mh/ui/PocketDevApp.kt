@@ -163,6 +163,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
@@ -3908,6 +3909,14 @@ private fun WorkspaceScreen(
     var selectedTab by rememberSaveable { mutableStateOf(WorkspaceTab.CHAT) }
     var showChats by rememberSaveable { mutableStateOf(false) }
     val activeChat = state.projectChats.firstOrNull { it.id == state.activeChatId }
+    val focusManager = LocalFocusManager.current
+
+    // The keyboard belongs to the field the user actually tapped. Compose restores
+    // focus when a page comes back, so drop it whenever the visible page changes
+    // and the soft keyboard would otherwise reappear on its own.
+    LaunchedEffect(selectedTab) {
+        focusManager.clearFocus(force = true)
+    }
 
     // If a file is open, show the FileViewerScreen on top
     if (state.openedFilePath != null) {
@@ -4027,6 +4036,9 @@ private fun WorkspaceScreen(
                     NavigationBarItem(
                         selected = selectedTab == tab,
                         onClick = {
+                            // Leaving a page must not carry focus (and the open
+                            // keyboard) into the next one.
+                            focusManager.clearFocus(force = true)
                             selectedTab = tab
                             if (tab == WorkspaceTab.FILES) onRefreshFiles()
                             if (tab == WorkspaceTab.TERMINAL) onTerminalOpened()
@@ -5392,6 +5404,11 @@ private fun PreviewTab(ready: Boolean, url: String?) {
                 factory = { context ->
                     WebView(context).apply {
                         webView = this
+                        // A preview is not a form. A WebView grabs focus the moment
+                        // it is created, which popped the soft keyboard over the
+                        // page every time this tab was opened.
+                        isFocusable = false
+                        isFocusableInTouchMode = false
                         settings.javaScriptEnabled = true
                         settings.domStorageEnabled = true
                         webChromeClient = object : WebChromeClient() {
