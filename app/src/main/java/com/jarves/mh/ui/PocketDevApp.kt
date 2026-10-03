@@ -225,8 +225,9 @@ import kotlinx.coroutines.launch
 
 import com.jarves.mh.ui.theme.AppThemeMode
 import androidx.compose.material.icons.filled.SmartToy
-import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.filled.FormatTextdirectionLToR
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FilterChip
 
 private enum class RootScreen(val label: String, val icon: ImageVector) {
     PROJECTS("Projects", Icons.Default.Folder),
@@ -2023,6 +2024,44 @@ private fun StartupErrorScreen(
 
 private fun formatMegabytes(bytes: Long): String = "%.1f MB".format(bytes / 1_048_576.0)
 
+/**
+ * Right-to-left or left-to-right chat for a project.
+ *
+ * The app used to guess the direction from each message, which laid out mixed
+ * Persian and English sentences inconsistently: two Persian messages could end up
+ * aligned to opposite edges. Picking the direction once per project keeps every
+ * message in that project aligned the same way.
+ */
+@Composable
+private fun ProjectDirectionPicker(isRtl: Boolean, onChange: (Boolean) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("Chat direction", fontWeight = FontWeight.Medium, fontSize = 13.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(
+                selected = !isRtl,
+                onClick = { onChange(false) },
+                label = { Text("Left to right") },
+                leadingIcon = { Text("A→", fontWeight = FontWeight.Bold) },
+            )
+            FilterChip(
+                selected = isRtl,
+                onClick = { onChange(true) },
+                label = { Text("Right to left") },
+                leadingIcon = { Text("A←", fontWeight = FontWeight.Bold) },
+            )
+        }
+        Text(
+            if (isRtl) {
+                "Messages are laid out for Persian, Arabic and Hebrew text."
+            } else {
+                "Messages are laid out for English and other left-to-right text."
+            },
+            fontSize = 11.5.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun RootScreenHost(
@@ -2075,7 +2114,7 @@ private fun RootScreenHost(
                     state = state,
                     listState = projectsListState,
                     onOpen = viewModel::openProject,
-                    onCreate = viewModel::createProject,
+                    onCreate = { name, rtl -> viewModel.createProject(name, rtl) },
                     onCreateQuickProject = viewModel::createQuickProject,
                     onImportZip = viewModel::importZipProject,
                     onCloneGit = viewModel::clonePublicGitRepository,
@@ -2085,6 +2124,7 @@ private fun RootScreenHost(
                     onDisconnectGitHub = viewModel::disconnectGitHub,
                     onCloneGitHub = viewModel::cloneGitHubRepository,
                     onRenameProject = viewModel::renameProject,
+                    onSetProjectTextDirection = viewModel::setProjectTextDirection,
                     onDeleteProject = viewModel::deleteProject,
                     onSettings = { screen = RootScreen.SETTINGS },
                     onPing = viewModel::pingApi,
@@ -3065,7 +3105,7 @@ private fun ProjectsScreen(
     state: AppUiState,
     listState: LazyListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() },
     onOpen: (Project) -> Unit,
-    onCreate: (String) -> Unit,
+    onCreate: (String, Boolean) -> Unit,
     onCreateQuickProject: () -> Unit,
     onImportZip: (Uri) -> Unit,
     onCloneGit: (String) -> Unit,
@@ -3075,6 +3115,7 @@ private fun ProjectsScreen(
     onDisconnectGitHub: () -> Unit,
     onCloneGitHub: (GitHubRepository) -> Unit,
     onRenameProject: (String, String) -> Unit,
+    onSetProjectTextDirection: (String, Boolean) -> Unit,
     onDeleteProject: (String) -> Unit,
     onSettings: () -> Unit,
     onPing: () -> Unit,
@@ -3089,6 +3130,7 @@ private fun ProjectsScreen(
     var gitUrl by rememberSaveable { mutableStateOf("") }
     var repositorySearch by rememberSaveable { mutableStateOf("") }
     var name by rememberSaveable { mutableStateOf("") }
+    var isRtl by rememberSaveable { mutableStateOf(false) }
     val projects = state.projects
     val context = LocalContext.current
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
@@ -3334,6 +3376,7 @@ private fun ProjectsScreen(
                         terminalRunning = state.projectTerminalRunning && state.activeProject?.id == project.id,
                         onOpen = { onOpen(project) },
                         onRename = { onRenameProject(project.id, it) },
+                        onSetTextDirection = { id, rtl -> onSetProjectTextDirection(id, rtl) },
                         onDelete = { onDeleteProject(project.id) },
                     )
                 }
@@ -3344,8 +3387,9 @@ private fun ProjectsScreen(
         onDismissRequest = { showCreate = false },
         title = { Text("Create a starter project") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedTextField(name, { name = it }, label = { Text("Project name") }, singleLine = true)
+                ProjectDirectionPicker(isRtl = isRtl, onChange = { isRtl = it })
                 if (name.isNotBlank()) {
                     Text(
                         "Terminal folder: /workspace/${projectSlug(name)}",
@@ -3356,7 +3400,7 @@ private fun ProjectsScreen(
                 }
             }
         },
-        confirmButton = { TextButton(onClick = { onCreate(name); showCreate = false; name = "" }, enabled = name.isNotBlank()) { Text("Create") } },
+        confirmButton = { TextButton(onClick = { onCreate(name, isRtl); showCreate = false; name = "" }, enabled = name.isNotBlank()) { Text("Create") } },
         dismissButton = { TextButton(onClick = { showCreate = false }) { Text("Cancel") } },
     )
     if (showGitDialog) AlertDialog(
@@ -3644,6 +3688,7 @@ private fun ProjectCard(
     terminalRunning: Boolean,
     onOpen: () -> Unit,
     onRename: (String) -> Unit,
+    onSetTextDirection: (String, Boolean) -> Unit,
     onDelete: () -> Unit,
 ) {
     var menuOpen by rememberSaveable(project.id) { mutableStateOf(false) }
@@ -3693,6 +3738,11 @@ private fun ProjectCard(
                         text = { Text("Rename project") },
                         leadingIcon = { Icon(Icons.Default.Edit, null) },
                         onClick = { menuOpen = false; renameText = project.name; showRename = true },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(if (project.isRtl) "Switch chat to left-to-right" else "Switch chat to right-to-left") },
+                        leadingIcon = { Icon(Icons.Default.FormatTextdirectionLToR, null) },
+                        onClick = { menuOpen = false; onSetTextDirection(project.id, !project.isRtl) },
                     )
                     DropdownMenuItem(
                         text = { Text("Delete project") },
@@ -3794,6 +3844,7 @@ private fun ReadOnlyProjectScreen(
                 taskFinishedAtMillis = null,
                 thinkingActive = false,
                 agentKind = state.agentKind,
+                isRtl = state.readOnlyProject?.isRtl == true,
                 pendingAttachments = emptyList(),
                 onAttach = {},
                 onRemoveAttachment = {},
@@ -4067,6 +4118,7 @@ private fun WorkspaceScreen(
                     taskFinishedAtMillis = state.taskFinishedAtMillis,
                     thinkingActive = state.liveThinking,
                     agentKind = state.agentKind,
+                    isRtl = state.activeProject?.isRtl == true,
                     pendingAttachments = state.pendingAttachments,
                     onAttach = {
                         attachmentLauncher.launch(arrayOf("image/*", "text/*", "application/json", "application/xml"))
@@ -4450,6 +4502,7 @@ private fun ChatTab(
     onRemoveAttachment: (String) -> Unit,
     onOpenAttachment: (ChatAttachment) -> Unit,
     onRunInTerminal: (String) -> Unit,
+    isRtl: Boolean = false,
     readOnly: Boolean = false,
     readOnlyBlocked: Boolean = false,
     onContinueHere: () -> Unit = {},
@@ -4481,7 +4534,7 @@ private fun ChatTab(
                     if (message.workItems.isNotEmpty()) {
                         WorkBlockCard(message)
                     } else {
-                        MessageBubble(message, onRunInTerminal, onOpenAttachment)
+                        MessageBubble(message, isRtl, onRunInTerminal, onOpenAttachment)
                     }
                 }
                 if (liveProcess.isNotEmpty() || thinkingActive) {
@@ -5037,13 +5090,16 @@ private fun formatDuration(totalSeconds: Long): String = when {
 }
 
 @Composable
-private fun MessageBubble(message: ChatMessage, onRunInTerminal: (String) -> Unit, onOpenAttachment: (ChatAttachment) -> Unit) {
+private fun MessageBubble(
+    message: ChatMessage,
+    isRtl: Boolean,
+    onRunInTerminal: (String) -> Unit,
+    onOpenAttachment: (ChatAttachment) -> Unit,
+) {
     // Which side a bubble sits on is a fixed conversation convention, not a
-    // function of the language: mine on the right, the agent's on the left.
-    // Absolute arrangement keeps that independent of the text direction, which
-    // is decided per message below so Persian reads right to left and English
-    // reads left to right.
-    val textDirection = remember(message.text) { messageTextDirection(message.text) }
+    // language question: mine on the right, the agent's on the left. Absolute
+    // arrangement keeps that independent of the project's text direction.
+    val textDirection = remember(isRtl) { projectTextDirection(isRtl) }
     val preparedText = remember(message.text) { isolateLtrRuns(message.text) }
 
     Row(
@@ -5073,6 +5129,7 @@ private fun MessageBubble(message: ChatMessage, onRunInTerminal: (String) -> Uni
                             markdown = message.text,
                             modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 8.dp),
                             color = MaterialTheme.colorScheme.onSurface,
+                            isRtl = isRtl,
                             onRunCode = onRunInTerminal,
                         )
                     }

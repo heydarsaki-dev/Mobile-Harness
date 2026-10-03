@@ -72,18 +72,20 @@ fun MarkdownText(
     markdown: String,
     modifier: Modifier = Modifier,
     color: Color = Color.Unspecified,
+    isRtl: Boolean = false,
     onRunCode: ((String) -> Unit)? = null,
 ) {
     val blocks = remember(markdown) { parseMarkdown(markdown) }
+    val textDirection = remember(isRtl) { projectTextDirection(isRtl) }
 
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         blocks.forEach { block ->
             when (block) {
-                is MarkdownBlock.Header -> HeaderBlock(block)
+                is MarkdownBlock.Header -> HeaderBlock(block, textDirection)
                 is MarkdownBlock.CodeBlock -> CodeSnippetBlock(block, onRunCode)
-                is MarkdownBlock.BulletItem -> BulletBlock(block, color)
-                is MarkdownBlock.NumberedItem -> NumberedBlock(block, color)
-                is MarkdownBlock.BlockQuote -> QuoteBlock(block)
+                is MarkdownBlock.BulletItem -> BulletBlock(block, color, textDirection)
+                is MarkdownBlock.NumberedItem -> NumberedBlock(block, color, textDirection)
+                is MarkdownBlock.BlockQuote -> QuoteBlock(block, textDirection)
                 is MarkdownBlock.HorizontalRule -> HorizontalDivider(
                     color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
                     modifier = Modifier.padding(vertical = 4.dp),
@@ -94,7 +96,7 @@ fun MarkdownText(
                         style = MaterialTheme.typography.bodyMedium.copy(
                             lineHeight = 22.sp,
                             textAlign = TextAlign.Start,
-                            textDirection = messageTextDirection(block.text),
+                            textDirection = textDirection,
                         ),
                         color = color,
                     )
@@ -105,7 +107,7 @@ fun MarkdownText(
 }
 
 @Composable
-private fun HeaderBlock(header: MarkdownBlock.Header) {
+private fun HeaderBlock(header: MarkdownBlock.Header, textDirection: TextDirection) {
     val style = when (header.level) {
         1 -> MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold, fontSize = 20.sp)
         2 -> MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, fontSize = 17.sp)
@@ -115,7 +117,7 @@ private fun HeaderBlock(header: MarkdownBlock.Header) {
         text = formatInlineMarkdown(isolateLtrRuns(header.text)),
         style = style.copy(
             textAlign = TextAlign.Start,
-            textDirection = messageTextDirection(header.text),
+            textDirection = textDirection,
         ),
         color = MaterialTheme.colorScheme.onSurface,
         modifier = Modifier.padding(top = 4.dp),
@@ -123,7 +125,7 @@ private fun HeaderBlock(header: MarkdownBlock.Header) {
 }
 
 @Composable
-private fun BulletBlock(item: MarkdownBlock.BulletItem, color: Color) {
+private fun BulletBlock(item: MarkdownBlock.BulletItem, color: Color, textDirection: TextDirection) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -141,7 +143,7 @@ private fun BulletBlock(item: MarkdownBlock.BulletItem, color: Color) {
             style = MaterialTheme.typography.bodyMedium.copy(
                 lineHeight = 22.sp,
                 textAlign = TextAlign.Start,
-                textDirection = messageTextDirection(item.text),
+                textDirection = textDirection,
             ),
             color = color,
             modifier = Modifier.weight(1f),
@@ -150,7 +152,7 @@ private fun BulletBlock(item: MarkdownBlock.BulletItem, color: Color) {
 }
 
 @Composable
-private fun NumberedBlock(item: MarkdownBlock.NumberedItem, color: Color) {
+private fun NumberedBlock(item: MarkdownBlock.NumberedItem, color: Color, textDirection: TextDirection) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.Top,
@@ -169,7 +171,7 @@ private fun NumberedBlock(item: MarkdownBlock.NumberedItem, color: Color) {
             style = MaterialTheme.typography.bodyMedium.copy(
                 lineHeight = 22.sp,
                 textAlign = TextAlign.Start,
-                textDirection = messageTextDirection(item.text),
+                textDirection = textDirection,
             ),
             color = color,
             modifier = Modifier.weight(1f),
@@ -178,7 +180,7 @@ private fun NumberedBlock(item: MarkdownBlock.NumberedItem, color: Color) {
 }
 
 @Composable
-private fun QuoteBlock(quote: MarkdownBlock.BlockQuote) {
+private fun QuoteBlock(quote: MarkdownBlock.BlockQuote, textDirection: TextDirection) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -200,7 +202,7 @@ private fun QuoteBlock(quote: MarkdownBlock.BlockQuote) {
                 fontStyle = FontStyle.Italic,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Start,
-                textDirection = messageTextDirection(quote.text),
+                textDirection = textDirection,
             ),
         )
     }

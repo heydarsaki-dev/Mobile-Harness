@@ -172,6 +172,13 @@ data class Project(
     val rootPath: String = "",
     val updatedAtMillis: Long = System.currentTimeMillis(),
     val kind: ProjectKind = ProjectKind.PROJECT,
+    /**
+     * Whether this project is written right to left (Persian, Arabic, Hebrew).
+     * Picked when the project is created and editable afterwards, so chat bubbles
+     * follow a direction the user chose instead of one guessed from the text,
+     * which laid mixed Persian and English sentences out unpredictably.
+     */
+    val isRtl: Boolean = false,
 ) {
     val formattedUpdatedAt: String
         get() {

@@ -244,6 +244,7 @@ class AppPreferences(private val context: Context) {
                 put("rootPath", p.rootPath)
                 put("updatedAtMillis", p.updatedAtMillis)
                 put("kind", p.kind.name)
+                put("isRtl", p.isRtl)
             })
         }
         preferences.edit().putString("projects_json", arr.toString()).apply()
@@ -294,6 +295,7 @@ class AppPreferences(private val context: Context) {
                         else -> runCatching { ProjectKind.valueOf(storedKind) }
                             .getOrDefault(ProjectKind.PROJECT)
                     },
+                    isRtl = obj.optBoolean("isRtl", false),
                 )
             }
         }.getOrDefault(emptyList())

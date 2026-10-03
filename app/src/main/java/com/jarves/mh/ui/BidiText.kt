@@ -6,9 +6,13 @@ import androidx.compose.ui.text.style.TextDirection
  * Bidirectional (mixed Persian/English) text helpers for chat bubbles.
  *
  * Compose resolves [TextDirection.Unspecified] from the *device locale*, not from
- * the text itself, so a Persian message on an English phone is laid out with a
+ * the text itself, so a Persian message on an English phone was laid out with a
  * left-to-right base direction. That is what scrambles sentences which mix
  * Persian prose with Latin identifiers, file names or punctuation.
+ *
+ * The direction itself is no longer guessed per message: it is a per-project
+ * setting chosen by the user. What is left here is keeping embedded Latin runs
+ * in place inside a right-to-left paragraph.
  */
 
 // Unicode bidi isolate controls (U+2066..U+2069). Android has understood these
@@ -16,7 +20,8 @@ import androidx.compose.ui.text.style.TextDirection
 private const val LRI = '\u2066' // left-to-right isolate
 private const val PDI = '\u2069' // pop directional isolate
 
-/** Characters with a strong right-to-left directionality (Unicode 6.3+). */
+/** Characters with a strong right-to-left directionality (Unicode 6.3+).
+ */
 private fun isStrongRtl(ch: Char): Boolean {
     val c = ch.code
     return c in 0x0590..0x05FF || // Hebrew
@@ -41,38 +46,19 @@ private fun isStrongLtr(ch: Char): Boolean {
 }
 
 /** True when [text] contains at least one strong right-to-left character. */
-fun containsRtl(text: String): Boolean = text.any(::isStrongRtl)
+private fun containsRtl(text: String): Boolean = text.any(::isStrongRtl)
 
 /**
- * Base direction for a chat message, decided by the dominant script rather than
- * by the first strong character.
+ * Paragraph direction for a project.
  *
- * Unicode would take the first strong character, but a reply that opens with a
- * Latin heading and then continues in Persian ("Here is the fix: ...") then laid
- * the whole paragraph out left to right and left the embedded Persian looking
- * scrambled. Counting strong characters keeps Persian right to left whatever
- * opens the message, and keeps a mostly-English message left to right.
+ * The user picks right-to-left or left-to-right once per project instead of the
+ * app guessing from each message. Guessing was unstable: a Persian sentence
+ * carrying several English identifiers counted as English and flipped to
+ * left-to-right, so two Persian messages in the same chat ended up aligned to
+ * opposite edges.
  */
-fun messageTextDirection(text: String): TextDirection {
-    var rtl = 0
-    var ltr = 0
-    var firstStrong: Char? = null
-    for (ch in text) {
-        if (isStrongRtl(ch)) {
-            rtl++
-            if (firstStrong == null) firstStrong = ch
-        } else if (isStrongLtr(ch)) {
-            ltr++
-            if (firstStrong == null) firstStrong = ch
-        }
-    }
-    return when {
-        rtl > ltr -> TextDirection.Rtl
-        ltr > rtl -> TextDirection.Ltr
-        firstStrong != null && isStrongRtl(firstStrong) -> TextDirection.Rtl
-        else -> TextDirection.Ltr
-    }
-}
+fun projectTextDirection(isRtl: Boolean): TextDirection =
+    if (isRtl) TextDirection.Rtl else TextDirection.Ltr
 
 /**
  * Latin runs that a Persian sentence must not reorder: inline code, URLs,

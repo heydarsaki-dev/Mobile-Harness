@@ -1999,7 +1999,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun consumeToast() = _state.update { it.copy(toastMessage = null) }
 
-    fun createProject(name: String) {
+    fun createProject(name: String, isRtl: Boolean = false) {
         if (name.isBlank()) return
         if (_state.value.isRunning || _state.value.projectTerminalRunning) {
             _state.update { it.copy(toastMessage = "Stop the background task before creating another project") }
@@ -2015,6 +2015,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             description = "Starter web project",
             language = "TypeScript",
             slug = slug,
+            isRtl = isRtl,
         )
         configureBridgeRoots(project.id, project.rootPath)
         val guestRoot = projectGuestRoot(project)
@@ -2052,7 +2053,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         refreshProjectFiles()
     }
 
-    fun createQuickProject() {
+    fun createQuickProject(isRtl: Boolean = false) {
         if (_state.value.isRunning || _state.value.projectTerminalRunning) {
             _state.update { it.copy(toastMessage = "Stop the background task before creating another project") }
             return
@@ -2064,6 +2065,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             language = "General",
             slug = identity.slug,
             kind = ProjectKind.QUICK_PROJECT,
+            isRtl = isRtl,
         )
         val firstChat = ProjectChat(title = "New chat")
         File(getApplication<Application>().filesDir, "workspaces/${project.id}").mkdirs()
@@ -2626,6 +2628,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             val active = current.activeProject?.let { project ->
                 if (project.id == projectId) project.copy(name = clean) else project
+            }
+            current.copy(projects = projects, activeProject = active)
+        }
+        preferences.saveProjects(_state.value.projects)
+    }
+
+    /**
+     * Switches an existing project between right-to-left and left-to-right chat.
+     * Bubbles keep their fixed side (mine right, the agent's left); only the text
+     * inside them follows this flag.
+     */
+    fun setProjectTextDirection(projectId: String, isRtl: Boolean) {
+        _state.update { current ->
+            val projects = current.projects.map { project ->
+                if (project.id == projectId) project.copy(isRtl = isRtl) else project
+            }
+            val active = current.activeProject?.let { project ->
+                if (project.id == projectId) project.copy(isRtl = isRtl) else project
             }
             current.copy(projects = projects, activeProject = active)
         }
