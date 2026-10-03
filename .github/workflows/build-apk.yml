@@ -5,18 +5,30 @@ on:
   push:
     branches: [ main ]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned by app/build.gradle.kts. The GitHub runner image does not ship
+  # these versions, so they are installed explicitly below.
+  NDK_VERSION: "26.1.10909125"
+  CMAKE_VERSION: "3.22.1"
+
 jobs:
   build:
-    name: Build online debug APK
+    name: Build online release APK
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 120
 
     steps:
       - name: Checkout with submodules
         uses: actions/checkout@v4
         with:
           submodules: recursive
-          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -27,28 +39,113 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Install zstd
-        run: sudo apt-get update && sudo apt-get install -y zstd
-
-      - name: Accept SDK licenses
+      - name: Install host tools
         run: |
-          yes | sdkmanager --licenses > /dev/null || true
+          sudo apt-get update
+          sudo apt-get install -y zstd unzip
+          command -v zstd
+          command -v unzip
+          command -v python3
 
-      - name: Install NDK and CMake
+      - name: Install pinned NDK and CMake
+        shell: bash
         run: |
-          sdkmanager --install "ndk;26.1.10909125" "cmake;3.22.1"
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          echo "SDK_ROOT=$SDK_ROOT"
+          test -x "$SDKMANAGER" || { echo "sdkmanager not found at $SDKMANAGER" >&2; exit 1; }
+
+          yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses > /dev/null 2>&1 || true
+
+          # Preferred path: let sdkmanager resolve the pinned components.
+          if "$SDKMANAGER" --sdk_root="$SDK_ROOT" \
+                --install "ndk;$NDK_VERSION" "cmake;$CMAKE_VERSION"; then
+            echo "sdkmanager installed the pinned NDK/CMake"
+          else
+            # Fallback: sdkmanager drops older components from its repository,
+            # so pull the exact archives from Google's download server instead.
+            echo "::warning::sdkmanager could not install the pinned versions; downloading directly"
+
+            echo "Downloading NDK r26b"
+            curl -fL --retry 3 -o /tmp/ndk.zip \
+              "https://dl.google.com/android/repository/android-ndk-r26b-linux.zip"
+            rm -rf /tmp/ndk-x && mkdir -p /tmp/ndk-x
+            unzip -q /tmp/ndk.zip -d /tmp/ndk-x
+            ndk_props="$(find /tmp/ndk-x -maxdepth 3 -type f -name source.properties | head -n 1)"
+            test -n "$ndk_props" || { echo "NDK archive layout unexpected" >&2; exit 1; }
+            rm -rf "$SDK_ROOT/ndk/$NDK_VERSION"
+            mkdir -p "$SDK_ROOT/ndk"
+            mv "$(dirname "$ndk_props")" "$SDK_ROOT/ndk/$NDK_VERSION"
+
+            echo "Downloading CMake $CMAKE_VERSION"
+            curl -fL --retry 3 -o /tmp/cmake.zip \
+              "https://dl.google.com/android/repository/cmake-${CMAKE_VERSION}-linux.zip"
+            rm -rf /tmp/cmake-x && mkdir -p /tmp/cmake-x
+            unzip -q /tmp/cmake.zip -d /tmp/cmake-x
+            cmake_bin="$(find /tmp/cmake-x -maxdepth 4 -type f -path '*/bin/cmake' | head -n 1)"
+            test -n "$cmake_bin" || { echo "CMake archive layout unexpected" >&2; exit 1; }
+            rm -rf "$SDK_ROOT/cmake/$CMAKE_VERSION"
+            mkdir -p "$SDK_ROOT/cmake"
+            mv "${cmake_bin%/bin/cmake}" "$SDK_ROOT/cmake/$CMAKE_VERSION"
+          fi
+
+          # Keep source.properties authoritative so AGP resolves the NDK.
+          current="$(sed -n 's/^Pkg\.Revision *= *//p' "$SDK_ROOT/ndk/$NDK_VERSION/source.properties" | tr -d '\r' | head -n 1)"
+          echo "NDK Pkg.Revision: $current"
+          if [ "$current" != "$NDK_VERSION" ]; then
+            echo "::warning::normalising NDK revision $current -> $NDK_VERSION"
+            sed -i "s/^Pkg\.Revision *=.*/Pkg.Revision = $NDK_VERSION/" \
+              "$SDK_ROOT/ndk/$NDK_VERSION/source.properties"
+          fi
+
+          test -f "$SDK_ROOT/ndk/$NDK_VERSION/source.properties"
+          test -x "$SDK_ROOT/cmake/$CMAKE_VERSION/bin/cmake"
+          "$SDK_ROOT/cmake/$CMAKE_VERSION/bin/cmake" --version
 
       - name: Build Antigravity runtime bundle
         run: |
+          chmod +x gradlew
           chmod +x scripts/runtime-bundles/build-agy-from-official.sh
           scripts/runtime-bundles/build-agy-from-official.sh
 
+      - name: Create signing keystore
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Throwaway key: the keystore is never published, only the signed APK.
+          pw="$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 28)"
+          {
+            echo "MH_UPLOAD_STORE_FILE=release.jks"
+            echo "MH_UPLOAD_KEY_ALIAS=mobileharness"
+            echo "MH_UPLOAD_STORE_PASSWORD=$pw"
+            echo "MH_UPLOAD_KEY_PASSWORD=$pw"
+          } >> "$GITHUB_ENV"
+          keytool -genkeypair -v -keystore release.jks -storetype JKS \
+            -storepass "$pw" -keypass "$pw" -alias mobileharness \
+            -keyalg RSA -keysize 4096 -validity 10950 \
+            -dname "CN=Mobile Harness, OU=CI Build, O=Mobile Harness, C=US"
+
       - name: Build APK
-        run: ./gradlew --no-daemon assembleOnlineDebug
+        run: ./gradlew --no-daemon assembleOnlineRelease
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk="$(ls app/build/outputs/apk/online/release/*.apk | head -n 1)"
+          echo "APK=$apk"
+          ls -lh "$apk"
+          build_tools="$ANDROID_SDK_ROOT/build-tools/35.0.0"
+          "$build_tools/aapt2" dump badging "$apk" | head -n 12
+          "$build_tools/aapt2" dump badging "$apk" | grep -E "native-code|sdkVersion|targetSdkVersion" || true
+          "$build_tools/apksigner" verify --verbose "$apk" | head -n 10
+          sha256sum "$apk" | tee app/build/outputs/apk/online/release/SHA256SUMS.txt
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: mobile-harness-online-debug
-          path: app/build/outputs/apk/online/debug/*.apk
+          name: mobile-harness-apk
+          path: app/build/outputs/apk/online/release/
           if-no-files-found: error
+          retention-days: 30
