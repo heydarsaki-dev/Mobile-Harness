@@ -1,7 +1,6 @@
 package com.jarves.mh.ui
 
 import androidx.compose.ui.text.style.TextDirection
-import androidx.compose.ui.unit.LayoutDirection
 
 /**
  * Bidirectional (mixed Persian/English) text helpers for chat bubbles.
@@ -44,40 +43,57 @@ private fun isStrongLtr(ch: Char): Boolean {
 /** True when [text] contains at least one strong right-to-left character. */
 fun containsRtl(text: String): Boolean = text.any(::isStrongRtl)
 
-private fun containsStrongLtr(text: String): Boolean = text.any(::isStrongLtr)
-
 /**
- * Base direction for a chat message.
+ * Base direction for a chat message, decided by the dominant script rather than
+ * by the first strong character.
  *
- * [TextDirection.Content] lets the Unicode bidi algorithm pick the paragraph
- * direction from the first strong character, which is the correct behaviour for
- * prose. It also keeps a mostly-English message left-to-right, so the choice is
- * made per message instead of per device.
+ * Unicode would take the first strong character, but a reply that opens with a
+ * Latin heading and then continues in Persian ("Here is the fix: ...") then laid
+ * the whole paragraph out left to right and left the embedded Persian looking
+ * scrambled. Counting strong characters keeps Persian right to left whatever
+ * opens the message, and keeps a mostly-English message left to right.
  */
-fun messageTextDirection(text: String): TextDirection = when {
-    containsRtl(text) -> TextDirection.Content
-    containsStrongLtr(text) -> TextDirection.Ltr
-    else -> TextDirection.Content
+fun messageTextDirection(text: String): TextDirection {
+    var rtl = 0
+    var ltr = 0
+    var firstStrong: Char? = null
+    for (ch in text) {
+        if (isStrongRtl(ch)) {
+            rtl++
+            if (firstStrong == null) firstStrong = ch
+        } else if (isStrongLtr(ch)) {
+            ltr++
+            if (firstStrong == null) firstStrong = ch
+        }
+    }
+    return when {
+        rtl > ltr -> TextDirection.Rtl
+        ltr > rtl -> TextDirection.Ltr
+        firstStrong != null && isStrongRtl(firstStrong) -> TextDirection.Rtl
+        else -> TextDirection.Ltr
+    }
 }
 
 /**
- * Layout direction for a chat bubble, so Persian messages start on the right
- * edge and read right to left regardless of the device locale.
- */
-fun messageLayoutDirection(text: String): LayoutDirection =
-    if (containsRtl(text)) LayoutDirection.Rtl else LayoutDirection.Ltr
-
-/**
- * Latin runs that a Persian sentence must not reorder: URLs, dotted names such
- * as `main.py` and slashed paths such as `src/main/App.kt`. The character class
- * deliberately keeps brackets, quotes and parentheses out of the match so
- * markdown link syntax (`[label](url)`) still parses after wrapping.
+ * Latin runs that a Persian sentence must not reorder: inline code, URLs,
+ * dotted names such as `main.py`, slashed paths such as `src/main/App.kt` and
+ * multi-word English phrases such as `machine learning model`.
+ *
+ * The character class deliberately keeps brackets, quotes and parentheses out
+ * of the match so markdown link syntax (`[label](url)`) still parses after
+ * wrapping.
+ *
+ * A multi-word phrase is wrapped as one run, never one run per word: neutrals
+ * between two separate isolates resolve to the paragraph direction, which would
+ * reverse the word order. Single Latin words are left alone because they already
+ * form a correct left-to-right run on their own.
  */
 private val LTR_RUN = Regex(
     "`[^`\n]+`" +
         "|(?:https?://|ftp://|www\\.)[A-Za-z0-9\\-._~:/?#@!$&'*+,;=%\\[\\]]+" +
         "|[A-Za-z0-9_\\-]+(?:\\.[A-Za-z0-9_\\-]+)+" +
-        "|[A-Za-z0-9_\\-]+/[A-Za-z0-9_\\-./]*",
+        "|[A-Za-z0-9_\\-]+/[A-Za-z0-9_\\-./]*" +
+        "|[A-Za-z][A-Za-z0-9_'\\-]*(?: +[A-Za-z][A-Za-z0-9_'\\-]*)+",
 )
 
 /**
