@@ -23,6 +23,7 @@ import com.jarves.mh.model.ChatAttachment
 import com.jarves.mh.model.DevStack
 import com.jarves.mh.model.Project
 import com.jarves.mh.model.ProjectKind
+import com.jarves.mh.model.ChatTextAlign
 import com.jarves.mh.model.ProjectChat
 import com.jarves.mh.model.ProviderKind
 import com.jarves.mh.model.ProviderProfile
@@ -1999,7 +2000,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun consumeToast() = _state.update { it.copy(toastMessage = null) }
 
-    fun createProject(name: String, isRtl: Boolean = false) {
+    fun createProject(name: String, textAlign: ChatTextAlign = ChatTextAlign.START) {
         if (name.isBlank()) return
         if (_state.value.isRunning || _state.value.projectTerminalRunning) {
             _state.update { it.copy(toastMessage = "Stop the background task before creating another project") }
@@ -2015,7 +2016,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             description = "Starter web project",
             language = "TypeScript",
             slug = slug,
-            isRtl = isRtl,
+            textAlign = textAlign,
         )
         configureBridgeRoots(project.id, project.rootPath)
         val guestRoot = projectGuestRoot(project)
@@ -2053,7 +2054,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         refreshProjectFiles()
     }
 
-    fun createQuickProject(isRtl: Boolean = false) {
+    fun createQuickProject(textAlign: ChatTextAlign = ChatTextAlign.START) {
         if (_state.value.isRunning || _state.value.projectTerminalRunning) {
             _state.update { it.copy(toastMessage = "Stop the background task before creating another project") }
             return
@@ -2065,7 +2066,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             language = "General",
             slug = identity.slug,
             kind = ProjectKind.QUICK_PROJECT,
-            isRtl = isRtl,
+            textAlign = textAlign,
         )
         val firstChat = ProjectChat(title = "New chat")
         File(getApplication<Application>().filesDir, "workspaces/${project.id}").mkdirs()
@@ -2635,17 +2636,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Switches an existing project between right-to-left and left-to-right chat.
-     * Bubbles keep their fixed side (mine right, the agent's left); only the text
-     * inside them follows this flag.
+     * Changes where chat text sits inside its bubble. Chat itself always stays
+     * right to left, and bubbles keep their fixed side (mine right, the agent's
+     * left), so this only moves the text inside a bubble.
      */
-    fun setProjectTextDirection(projectId: String, isRtl: Boolean) {
+    fun setProjectTextAlign(projectId: String, textAlign: ChatTextAlign) {
         _state.update { current ->
             val projects = current.projects.map { project ->
-                if (project.id == projectId) project.copy(isRtl = isRtl) else project
+                if (project.id == projectId) project.copy(textAlign = textAlign) else project
             }
             val active = current.activeProject?.let { project ->
-                if (project.id == projectId) project.copy(isRtl = isRtl) else project
+                if (project.id == projectId) project.copy(textAlign = textAlign) else project
             }
             current.copy(projects = projects, activeProject = active)
         }

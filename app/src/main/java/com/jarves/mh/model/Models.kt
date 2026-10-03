@@ -163,6 +163,15 @@ data class ProviderProfile(
 
 enum class ProjectKind { PROJECT, QUICK_PROJECT }
 
+/**
+ * How chat text sits inside a bubble. Chat is always laid out right to left, so
+ * [START] is the right edge and [END] the left edge. This is a per-project
+ * choice rather than something derived from the message, because guessing the
+ * direction from the text put two Persian messages on opposite edges whenever
+ * one of them carried a lot of Latin identifiers.
+ */
+enum class ChatTextAlign { START, CENTER, END }
+
 data class Project(
     val id: String = UUID.randomUUID().toString(),
     val name: String,
@@ -172,13 +181,8 @@ data class Project(
     val rootPath: String = "",
     val updatedAtMillis: Long = System.currentTimeMillis(),
     val kind: ProjectKind = ProjectKind.PROJECT,
-    /**
-     * Whether this project is written right to left (Persian, Arabic, Hebrew).
-     * Picked when the project is created and editable afterwards, so chat bubbles
-     * follow a direction the user chose instead of one guessed from the text,
-     * which laid mixed Persian and English sentences out unpredictably.
-     */
-    val isRtl: Boolean = false,
+    /** Chosen when the project is created and editable afterwards. */
+    val textAlign: ChatTextAlign = ChatTextAlign.START,
 ) {
     val formattedUpdatedAt: String
         get() {

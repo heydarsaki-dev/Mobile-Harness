@@ -1,6 +1,8 @@
 package com.jarves.mh.ui
 
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDirection
+import com.jarves.mh.model.ChatTextAlign
 
 /**
  * Bidirectional (mixed Persian/English) text helpers for chat bubbles.
@@ -10,17 +12,28 @@ import androidx.compose.ui.text.style.TextDirection
  * left-to-right base direction. That is what scrambles sentences which mix
  * Persian prose with Latin identifiers, file names or punctuation.
  *
- * The direction itself is no longer guessed per message: it is a per-project
- * setting chosen by the user. What is left here is keeping embedded Latin runs
- * in place inside a right-to-left paragraph.
+ * The direction is always right to left and is never guessed from the message:
+ * guessing was unstable, because a Persian sentence carrying several English
+ * identifiers was counted as English and flipped to left-to-right, putting two
+ * Persian messages on opposite edges. What is left to choose is where the text
+ * sits inside its bubble.
  */
+fun chatTextAlign(align: ChatTextAlign): TextAlign = when (align) {
+    ChatTextAlign.START -> TextAlign.Start
+    ChatTextAlign.CENTER -> TextAlign.Center
+    ChatTextAlign.END -> TextAlign.End
+}
+
+/** Chat is always laid out right to left, whatever the project alignment. */
+val ChatTextDirection: TextDirection = TextDirection.Rtl
 
 // Unicode bidi isolate controls (U+2066..U+2069). Android has understood these
 // since API 18, so they are safe to emit on every supported release.
 private const val LRI = '\u2066' // left-to-right isolate
 private const val PDI = '\u2069' // pop directional isolate
 
-/** Characters with a strong right-to-left directionality (Unicode 6.3+).
+/**
+ * Characters with a strong right-to-left directionality (Unicode 6.3+).
  */
 private fun isStrongRtl(ch: Char): Boolean {
     val c = ch.code
@@ -37,28 +50,8 @@ private fun isStrongRtl(ch: Char): Boolean {
         c in 0x1E800..0x1EFFF // Adlam, Arabic mathematical symbols
 }
 
-/** Characters with a strong left-to-right directionality. */
-private fun isStrongLtr(ch: Char): Boolean {
-    val c = ch.code
-    return c in 0x0041..0x005A || // A-Z
-        c in 0x0061..0x007A || // a-z
-        c in 0x00C0..0x02AF // Latin-1 supplement through IPA extensions
-}
-
 /** True when [text] contains at least one strong right-to-left character. */
 private fun containsRtl(text: String): Boolean = text.any(::isStrongRtl)
-
-/**
- * Paragraph direction for a project.
- *
- * The user picks right-to-left or left-to-right once per project instead of the
- * app guessing from each message. Guessing was unstable: a Persian sentence
- * carrying several English identifiers counted as English and flipped to
- * left-to-right, so two Persian messages in the same chat ended up aligned to
- * opposite edges.
- */
-fun projectTextDirection(isRtl: Boolean): TextDirection =
-    if (isRtl) TextDirection.Rtl else TextDirection.Ltr
 
 /**
  * Latin runs that a Persian sentence must not reorder: inline code, URLs,

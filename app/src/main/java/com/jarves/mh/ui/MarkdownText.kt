@@ -53,6 +53,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.jarves.mh.model.ChatTextAlign
 import com.jarves.mh.ui.theme.PocketOrange
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -72,20 +73,20 @@ fun MarkdownText(
     markdown: String,
     modifier: Modifier = Modifier,
     color: Color = Color.Unspecified,
-    isRtl: Boolean = false,
+    align: ChatTextAlign = ChatTextAlign.START,
     onRunCode: ((String) -> Unit)? = null,
 ) {
     val blocks = remember(markdown) { parseMarkdown(markdown) }
-    val textDirection = remember(isRtl) { projectTextDirection(isRtl) }
+    val textAlign = remember(align) { chatTextAlign(align) }
 
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         blocks.forEach { block ->
             when (block) {
-                is MarkdownBlock.Header -> HeaderBlock(block, textDirection)
+                is MarkdownBlock.Header -> HeaderBlock(block, textAlign)
                 is MarkdownBlock.CodeBlock -> CodeSnippetBlock(block, onRunCode)
-                is MarkdownBlock.BulletItem -> BulletBlock(block, color, textDirection)
-                is MarkdownBlock.NumberedItem -> NumberedBlock(block, color, textDirection)
-                is MarkdownBlock.BlockQuote -> QuoteBlock(block, textDirection)
+                is MarkdownBlock.BulletItem -> BulletBlock(block, color, textAlign)
+                is MarkdownBlock.NumberedItem -> NumberedBlock(block, color, textAlign)
+                is MarkdownBlock.BlockQuote -> QuoteBlock(block, textAlign)
                 is MarkdownBlock.HorizontalRule -> HorizontalDivider(
                     color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
                     modifier = Modifier.padding(vertical = 4.dp),
@@ -95,8 +96,8 @@ fun MarkdownText(
                         text = formatInlineMarkdown(isolateLtrRuns(block.text)),
                         style = MaterialTheme.typography.bodyMedium.copy(
                             lineHeight = 22.sp,
-                            textAlign = TextAlign.Start,
-                            textDirection = textDirection,
+                            textAlign = textAlign,
+                            textDirection = ChatTextDirection,
                         ),
                         color = color,
                     )
@@ -107,7 +108,7 @@ fun MarkdownText(
 }
 
 @Composable
-private fun HeaderBlock(header: MarkdownBlock.Header, textDirection: TextDirection) {
+private fun HeaderBlock(header: MarkdownBlock.Header, textAlign: TextAlign) {
     val style = when (header.level) {
         1 -> MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold, fontSize = 20.sp)
         2 -> MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, fontSize = 17.sp)
@@ -116,8 +117,8 @@ private fun HeaderBlock(header: MarkdownBlock.Header, textDirection: TextDirecti
     Text(
         text = formatInlineMarkdown(isolateLtrRuns(header.text)),
         style = style.copy(
-            textAlign = TextAlign.Start,
-            textDirection = textDirection,
+            textAlign = textAlign,
+            textDirection = ChatTextDirection,
         ),
         color = MaterialTheme.colorScheme.onSurface,
         modifier = Modifier.padding(top = 4.dp),
@@ -125,7 +126,7 @@ private fun HeaderBlock(header: MarkdownBlock.Header, textDirection: TextDirecti
 }
 
 @Composable
-private fun BulletBlock(item: MarkdownBlock.BulletItem, color: Color, textDirection: TextDirection) {
+private fun BulletBlock(item: MarkdownBlock.BulletItem, color: Color, textAlign: TextAlign) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -142,8 +143,8 @@ private fun BulletBlock(item: MarkdownBlock.BulletItem, color: Color, textDirect
             text = formatInlineMarkdown(isolateLtrRuns(item.text)),
             style = MaterialTheme.typography.bodyMedium.copy(
                 lineHeight = 22.sp,
-                textAlign = TextAlign.Start,
-                textDirection = textDirection,
+                textAlign = textAlign,
+                textDirection = ChatTextDirection,
             ),
             color = color,
             modifier = Modifier.weight(1f),
@@ -152,7 +153,7 @@ private fun BulletBlock(item: MarkdownBlock.BulletItem, color: Color, textDirect
 }
 
 @Composable
-private fun NumberedBlock(item: MarkdownBlock.NumberedItem, color: Color, textDirection: TextDirection) {
+private fun NumberedBlock(item: MarkdownBlock.NumberedItem, color: Color, textAlign: TextAlign) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.Top,
@@ -170,8 +171,8 @@ private fun NumberedBlock(item: MarkdownBlock.NumberedItem, color: Color, textDi
             text = formatInlineMarkdown(isolateLtrRuns(item.text)),
             style = MaterialTheme.typography.bodyMedium.copy(
                 lineHeight = 22.sp,
-                textAlign = TextAlign.Start,
-                textDirection = textDirection,
+                textAlign = textAlign,
+                textDirection = ChatTextDirection,
             ),
             color = color,
             modifier = Modifier.weight(1f),
@@ -180,7 +181,7 @@ private fun NumberedBlock(item: MarkdownBlock.NumberedItem, color: Color, textDi
 }
 
 @Composable
-private fun QuoteBlock(quote: MarkdownBlock.BlockQuote, textDirection: TextDirection) {
+private fun QuoteBlock(quote: MarkdownBlock.BlockQuote, textAlign: TextAlign) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -201,8 +202,8 @@ private fun QuoteBlock(quote: MarkdownBlock.BlockQuote, textDirection: TextDirec
             style = MaterialTheme.typography.bodyMedium.copy(
                 fontStyle = FontStyle.Italic,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Start,
-                textDirection = textDirection,
+                textAlign = textAlign,
+                textDirection = ChatTextDirection,
             ),
         )
     }

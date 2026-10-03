@@ -190,6 +190,7 @@ import com.jarves.mh.model.DSH_PROTOCOL_PROVIDERS
 import com.jarves.mh.model.DiffLine
 import com.jarves.mh.model.DiffLineType
 import com.jarves.mh.model.Project
+import com.jarves.mh.model.ChatTextAlign
 import com.jarves.mh.model.ProjectKind
 import com.jarves.mh.model.ProjectChat
 import com.jarves.mh.model.ProviderKind
@@ -225,7 +226,7 @@ import kotlinx.coroutines.launch
 
 import com.jarves.mh.ui.theme.AppThemeMode
 import androidx.compose.material.icons.filled.SmartToy
-import androidx.compose.material.icons.filled.FormatTextdirectionLToR
+import androidx.compose.material.icons.filled.FormatAlignLeft
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilterChip
 
@@ -2025,37 +2026,37 @@ private fun StartupErrorScreen(
 private fun formatMegabytes(bytes: Long): String = "%.1f MB".format(bytes / 1_048_576.0)
 
 /**
- * Right-to-left or left-to-right chat for a project.
+ * Where chat text sits inside a bubble for a project.
  *
- * The app used to guess the direction from each message, which laid out mixed
- * Persian and English sentences inconsistently: two Persian messages could end up
- * aligned to opposite edges. Picking the direction once per project keeps every
- * message in that project aligned the same way.
+ * Chat itself is always laid out right to left; this only chooses the edge the
+ * text hugs. The app used to derive the direction from each message, which put
+ * two Persian messages on opposite edges of their bubbles whenever one of them
+ * carried several English identifiers, so the direction is now fixed and the
+ * alignment is the only choice left to make.
  */
 @Composable
-private fun ProjectDirectionPicker(isRtl: Boolean, onChange: (Boolean) -> Unit) {
+private fun ChatAlignPicker(align: ChatTextAlign, onChange: (ChatTextAlign) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text("Chat direction", fontWeight = FontWeight.Medium, fontSize = 13.sp)
+        Text("Text alignment in bubbles", fontWeight = FontWeight.Medium, fontSize = 13.sp)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(
-                selected = !isRtl,
-                onClick = { onChange(false) },
-                label = { Text("Left to right") },
-                leadingIcon = { Text("A→", fontWeight = FontWeight.Bold) },
+                selected = align == ChatTextAlign.START,
+                onClick = { onChange(ChatTextAlign.START) },
+                label = { Text("Right") },
             )
             FilterChip(
-                selected = isRtl,
-                onClick = { onChange(true) },
-                label = { Text("Right to left") },
-                leadingIcon = { Text("A←", fontWeight = FontWeight.Bold) },
+                selected = align == ChatTextAlign.CENTER,
+                onClick = { onChange(ChatTextAlign.CENTER) },
+                label = { Text("Center") },
+            )
+            FilterChip(
+                selected = align == ChatTextAlign.END,
+                onClick = { onChange(ChatTextAlign.END) },
+                label = { Text("Left") },
             )
         }
         Text(
-            if (isRtl) {
-                "Messages are laid out for Persian, Arabic and Hebrew text."
-            } else {
-                "Messages are laid out for English and other left-to-right text."
-            },
+            "Chat always reads right to left. This only moves the text inside each bubble.",
             fontSize = 11.5.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -2114,7 +2115,7 @@ private fun RootScreenHost(
                     state = state,
                     listState = projectsListState,
                     onOpen = viewModel::openProject,
-                    onCreate = { name, rtl -> viewModel.createProject(name, rtl) },
+                    onCreate = { name, align -> viewModel.createProject(name, align) },
                     onCreateQuickProject = viewModel::createQuickProject,
                     onImportZip = viewModel::importZipProject,
                     onCloneGit = viewModel::clonePublicGitRepository,
@@ -2124,7 +2125,7 @@ private fun RootScreenHost(
                     onDisconnectGitHub = viewModel::disconnectGitHub,
                     onCloneGitHub = viewModel::cloneGitHubRepository,
                     onRenameProject = viewModel::renameProject,
-                    onSetProjectTextDirection = viewModel::setProjectTextDirection,
+                    onSetProjectTextAlign = viewModel::setProjectTextAlign,
                     onDeleteProject = viewModel::deleteProject,
                     onSettings = { screen = RootScreen.SETTINGS },
                     onPing = viewModel::pingApi,
@@ -3105,7 +3106,7 @@ private fun ProjectsScreen(
     state: AppUiState,
     listState: LazyListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() },
     onOpen: (Project) -> Unit,
-    onCreate: (String, Boolean) -> Unit,
+    onCreate: (String, ChatTextAlign) -> Unit,
     onCreateQuickProject: () -> Unit,
     onImportZip: (Uri) -> Unit,
     onCloneGit: (String) -> Unit,
@@ -3115,7 +3116,7 @@ private fun ProjectsScreen(
     onDisconnectGitHub: () -> Unit,
     onCloneGitHub: (GitHubRepository) -> Unit,
     onRenameProject: (String, String) -> Unit,
-    onSetProjectTextDirection: (String, Boolean) -> Unit,
+    onSetProjectTextAlign: (String, ChatTextAlign) -> Unit,
     onDeleteProject: (String) -> Unit,
     onSettings: () -> Unit,
     onPing: () -> Unit,
@@ -3130,7 +3131,7 @@ private fun ProjectsScreen(
     var gitUrl by rememberSaveable { mutableStateOf("") }
     var repositorySearch by rememberSaveable { mutableStateOf("") }
     var name by rememberSaveable { mutableStateOf("") }
-    var isRtl by rememberSaveable { mutableStateOf(false) }
+    var newProjectAlign by rememberSaveable { mutableStateOf(ChatTextAlign.START) }
     val projects = state.projects
     val context = LocalContext.current
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
@@ -3376,7 +3377,7 @@ private fun ProjectsScreen(
                         terminalRunning = state.projectTerminalRunning && state.activeProject?.id == project.id,
                         onOpen = { onOpen(project) },
                         onRename = { onRenameProject(project.id, it) },
-                        onSetTextDirection = { id, rtl -> onSetProjectTextDirection(id, rtl) },
+                        onSetTextAlign = { id, align -> onSetProjectTextAlign(id, align) },
                         onDelete = { onDeleteProject(project.id) },
                     )
                 }
@@ -3389,7 +3390,7 @@ private fun ProjectsScreen(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedTextField(name, { name = it }, label = { Text("Project name") }, singleLine = true)
-                ProjectDirectionPicker(isRtl = isRtl, onChange = { isRtl = it })
+                ChatAlignPicker(align = newProjectAlign, onChange = { newProjectAlign = it })
                 if (name.isNotBlank()) {
                     Text(
                         "Terminal folder: /workspace/${projectSlug(name)}",
@@ -3400,7 +3401,7 @@ private fun ProjectsScreen(
                 }
             }
         },
-        confirmButton = { TextButton(onClick = { onCreate(name, isRtl); showCreate = false; name = "" }, enabled = name.isNotBlank()) { Text("Create") } },
+        confirmButton = { TextButton(onClick = { onCreate(name, newProjectAlign); showCreate = false; name = "" }, enabled = name.isNotBlank()) { Text("Create") } },
         dismissButton = { TextButton(onClick = { showCreate = false }) { Text("Cancel") } },
     )
     if (showGitDialog) AlertDialog(
@@ -3688,12 +3689,13 @@ private fun ProjectCard(
     terminalRunning: Boolean,
     onOpen: () -> Unit,
     onRename: (String) -> Unit,
-    onSetTextDirection: (String, Boolean) -> Unit,
+    onSetTextAlign: (String, ChatTextAlign) -> Unit,
     onDelete: () -> Unit,
 ) {
     var menuOpen by rememberSaveable(project.id) { mutableStateOf(false) }
     var showRename by rememberSaveable(project.id) { mutableStateOf(false) }
     var showDelete by rememberSaveable(project.id) { mutableStateOf(false) }
+    var showAlign by rememberSaveable(project.id) { mutableStateOf(false) }
     var renameText by rememberSaveable(project.id) { mutableStateOf(project.name) }
     Card(Modifier.fillMaxWidth().clickable(onClick = onOpen), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Row(Modifier.padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -3740,9 +3742,9 @@ private fun ProjectCard(
                         onClick = { menuOpen = false; renameText = project.name; showRename = true },
                     )
                     DropdownMenuItem(
-                        text = { Text(if (project.isRtl) "Switch chat to left-to-right" else "Switch chat to right-to-left") },
-                        leadingIcon = { Icon(Icons.Default.FormatTextdirectionLToR, null) },
-                        onClick = { menuOpen = false; onSetTextDirection(project.id, !project.isRtl) },
+                        text = { Text("Text alignment") },
+                        leadingIcon = { Icon(Icons.Default.FormatAlignLeft, null) },
+                        onClick = { menuOpen = false; showAlign = true },
                     )
                     DropdownMenuItem(
                         text = { Text("Delete project") },
@@ -3760,6 +3762,14 @@ private fun ProjectCard(
             text = { OutlinedTextField(renameText, { renameText = it }, label = { Text("Project name") }, singleLine = true) },
             confirmButton = { TextButton(onClick = { onRename(renameText); showRename = false }, enabled = renameText.isNotBlank()) { Text("Save") } },
             dismissButton = { TextButton(onClick = { showRename = false }) { Text("Cancel") } },
+        )
+    }
+    if (showAlign) {
+        AlertDialog(
+            onDismissRequest = { showAlign = false },
+            title = { Text("Text alignment") },
+            text = { ChatAlignPicker(align = project.textAlign, onChange = { onSetTextAlign(project.id, it) }) },
+            confirmButton = { TextButton(onClick = { showAlign = false }) { Text("Done") } },
         )
     }
     if (showDelete) {
@@ -3844,7 +3854,7 @@ private fun ReadOnlyProjectScreen(
                 taskFinishedAtMillis = null,
                 thinkingActive = false,
                 agentKind = state.agentKind,
-                isRtl = state.readOnlyProject?.isRtl == true,
+                textAlign = state.readOnlyProject?.textAlign ?: ChatTextAlign.START,
                 pendingAttachments = emptyList(),
                 onAttach = {},
                 onRemoveAttachment = {},
@@ -4118,7 +4128,7 @@ private fun WorkspaceScreen(
                     taskFinishedAtMillis = state.taskFinishedAtMillis,
                     thinkingActive = state.liveThinking,
                     agentKind = state.agentKind,
-                    isRtl = state.activeProject?.isRtl == true,
+                    textAlign = state.activeProject?.textAlign ?: ChatTextAlign.START,
                     pendingAttachments = state.pendingAttachments,
                     onAttach = {
                         attachmentLauncher.launch(arrayOf("image/*", "text/*", "application/json", "application/xml"))
@@ -4502,7 +4512,7 @@ private fun ChatTab(
     onRemoveAttachment: (String) -> Unit,
     onOpenAttachment: (ChatAttachment) -> Unit,
     onRunInTerminal: (String) -> Unit,
-    isRtl: Boolean = false,
+    textAlign: ChatTextAlign = ChatTextAlign.START,
     readOnly: Boolean = false,
     readOnlyBlocked: Boolean = false,
     onContinueHere: () -> Unit = {},
@@ -4534,7 +4544,7 @@ private fun ChatTab(
                     if (message.workItems.isNotEmpty()) {
                         WorkBlockCard(message)
                     } else {
-                        MessageBubble(message, isRtl, onRunInTerminal, onOpenAttachment)
+                        MessageBubble(message, textAlign, onRunInTerminal, onOpenAttachment)
                     }
                 }
                 if (liveProcess.isNotEmpty() || thinkingActive) {
@@ -5092,14 +5102,14 @@ private fun formatDuration(totalSeconds: Long): String = when {
 @Composable
 private fun MessageBubble(
     message: ChatMessage,
-    isRtl: Boolean,
+    textAlign: ChatTextAlign,
     onRunInTerminal: (String) -> Unit,
     onOpenAttachment: (ChatAttachment) -> Unit,
 ) {
     // Which side a bubble sits on is a fixed conversation convention, not a
     // language question: mine on the right, the agent's on the left. Absolute
     // arrangement keeps that independent of the project's text direction.
-    val textDirection = remember(isRtl) { projectTextDirection(isRtl) }
+    val bubbleAlign = remember(textAlign) { chatTextAlign(textAlign) }
     val preparedText = remember(message.text) { isolateLtrRuns(message.text) }
 
     Row(
@@ -5119,8 +5129,8 @@ private fun MessageBubble(
                             modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 8.dp),
                             style = MaterialTheme.typography.bodyMedium.copy(
                                 lineHeight = 22.sp,
-                                textAlign = TextAlign.Start,
-                                textDirection = textDirection,
+                                textAlign = bubbleAlign,
+                                textDirection = ChatTextDirection,
                             ),
                             color = MaterialTheme.colorScheme.onPrimaryContainer,
                         )
@@ -5129,7 +5139,7 @@ private fun MessageBubble(
                             markdown = message.text,
                             modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 8.dp),
                             color = MaterialTheme.colorScheme.onSurface,
-                            isRtl = isRtl,
+                            align = textAlign,
                             onRunCode = onRunInTerminal,
                         )
                     }

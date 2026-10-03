@@ -4,6 +4,7 @@ import android.content.Context
 import com.jarves.mh.model.AgentKind
 import com.jarves.mh.model.ChatMessage
 import com.jarves.mh.model.ChatAttachment
+import com.jarves.mh.model.ChatTextAlign
 import com.jarves.mh.model.Project
 import com.jarves.mh.model.ProjectKind
 import com.jarves.mh.model.ProjectChat
@@ -244,7 +245,7 @@ class AppPreferences(private val context: Context) {
                 put("rootPath", p.rootPath)
                 put("updatedAtMillis", p.updatedAtMillis)
                 put("kind", p.kind.name)
-                put("isRtl", p.isRtl)
+                put("textAlign", p.textAlign.name)
             })
         }
         preferences.edit().putString("projects_json", arr.toString()).apply()
@@ -295,7 +296,8 @@ class AppPreferences(private val context: Context) {
                         else -> runCatching { ProjectKind.valueOf(storedKind) }
                             .getOrDefault(ProjectKind.PROJECT)
                     },
-                    isRtl = obj.optBoolean("isRtl", false),
+                    textAlign = runCatching { ChatTextAlign.valueOf(obj.optString("textAlign")) }
+                        .getOrDefault(ChatTextAlign.START),
                 )
             }
         }.getOrDefault(emptyList())
