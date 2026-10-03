@@ -41,6 +41,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
@@ -286,7 +287,7 @@ private fun CodeSnippetBlock(block: MarkdownBlock.CodeBlock, onRunCode: ((String
                         lineHeight = 19.sp,
                         color = Color(0xFFE2E8F0),
                         textAlign = TextAlign.Start,
-                        textDirection = TextDirection.Ltr,
+                        style = TextStyle(textDirection = TextDirection.Ltr),
                     )
                 }
             }

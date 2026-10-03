@@ -509,16 +509,14 @@ class DshRuntimeBridge(
         val message = error.message.orEmpty()
         return when {
             error is DshSessionException && message.isMeaningfulDshText() -> message
-            message.contains("authentication", true) ||
-                message.contains("invalid api key", true) ||
-                message.contains("autherror", true) ||
-                message.contains("expired", true) ||
-                message.contains("quota", true) ||
-                message.contains("rate limit", true) ||
-                listOf("401", "403", "429").any { code ->
-                    message.contains(code) && (message.contains("auth", true) || message.contains("HTTP", true))
-                } ->
+            // Only a confirmed auth failure is reported as a bad key. Rate limits
+            // and dropped connections are retried by the agent, and calling them a
+            // rejected key sent users to re-enter a perfectly valid one.
+            ProviderRuntimeErrorDetector.detect(message) != null ->
                 "The provider rejected the saved API key."
+            message.contains("429", true) || message.contains("rate limit", true) ->
+                "The provider is rate limiting this device. The agent will retry; try again in a moment."
+            message.contains("quota", true) -> "The provider account has no quota left for this request."
             message.contains("missing_credential", true) ->
                 "No API key reached DeepSeek Harness. Re-save the provider key in Settings."
             message.contains("not installed", true) -> message.take(300)

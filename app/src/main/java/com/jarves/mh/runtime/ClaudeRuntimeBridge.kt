@@ -32,34 +32,67 @@ import org.json.JSONObject
 import org.json.JSONArray
 
 internal object ProviderRuntimeErrorDetector {
+    /**
+     * Statuses the agent CLI retries on its own. Killing the process on these
+     * turned an ordinary rate limit or a dropped mobile connection into a failed
+     * task, which is why sessions kept stopping with a bogus "bad API key".
+     */
+    private val TRANSIENT_STATUSES = setOf(408, 409, 425, 429, 500, 502, 503, 504, 522, 524, 529)
+
+    /** Statuses that always mean the key itself cannot be used. */
+    private val FATAL_AUTH_STATUSES = setOf(401, 403)
+
+    /**
+     * Text that proves the key is bad on its own. Bare words such as "expired"
+     * or "quota" are deliberately absent: the agent prints them inside ordinary
+     * tool output and file contents, and matching them ended healthy sessions.
+     */
+    private val FATAL_KEY_MARKERS = listOf(
+        "authentication_failed",
+        "authentication failed",
+        "invalid_auth_error",
+        "invalid api key",
+        "incorrect api key",
+        "missing_credential",
+        "unauthorized",
+        "permission_error",
+    )
+
+    /** Matches "http 429", "HTTP/1.1 429" and similar status mentions. */
+    private val HTTP_STATUS = Regex("http[^0-9]{0,10}(\\d{3})")
+
     fun detect(line: String): String? {
         val json = runCatching { JSONObject(line) }.getOrNull()
         val combined = buildString {
             append(line)
-            json?.let {
-                append(' ')
-                append(it.optString("error"))
-                append(' ')
-                append(it.optString("message"))
-                append(' ')
-                append(it.optString("result"))
-            }
+            append(' ')
+            append(json?.optString("error").orEmpty())
+            append(' ')
+            append(json?.optString("message").orEmpty())
+            append(' ')
+            append(json?.optString("result").orEmpty())
         }.lowercase()
-        return when {
-            "user not found" in combined -> "User not found. Check the API key and provider account."
-            "authentication_failed" in combined ||
-                "authentication failed" in combined ||
-                "invalid api key" in combined ||
-                "http 401" in combined ||
-                "http 403" in combined ||
-                "http 429" in combined ||
-                "expired" in combined ||
-                "quota" in combined ||
-                "rate limit" in combined ||
-                (json?.optString("subtype") == "api_retry" && json.optInt("error_status") in listOf(401, 403, 429)) ->
-                "The provider rejected the saved API key."
-            else -> null
+
+        // Most specific first: it names the account problem instead of the key.
+        if ("user not found" in combined) {
+            return "User not found. Check the API key and provider account."
         }
+
+        val status = json?.optInt("error_status")?.takeIf { it > 0 }
+            ?: HTTP_STATUS.find(combined)?.groupValues?.get(1)?.toIntOrNull()
+
+        // Rate limits, upstream overload and dropped connections are retried by
+        // the CLI. Reporting them here would kill a session that was about to
+        // recover on its own.
+        if (status != null && status in TRANSIENT_STATUSES) return null
+
+        if (status != null && status in FATAL_AUTH_STATUSES) {
+            return "The provider rejected the saved API key."
+        }
+        if (FATAL_KEY_MARKERS.any { it in combined }) {
+            return "The provider rejected the saved API key."
+        }
+        return null
     }
 }
 
@@ -937,7 +970,13 @@ class ClaudeRuntimeBridge(
             error is ProviderSessionException -> message
             message.contains("user not found", true) -> "User not found. Check the API key and provider account."
             message.contains("checksum", true) -> "Runtime verification failed. Nothing unverified was executed."
-            message.contains("HTTP 401", true) || message.contains("authentication", true) -> "The provider rejected the saved API key."
+            // Only a confirmed auth failure is reported as a bad key. A rate limit
+            // or a dropped connection is named for what it is, otherwise the user
+            // is sent to re-enter a key that is perfectly valid.
+            ProviderRuntimeErrorDetector.detect(message) != null -> "The provider rejected the saved API key."
+            message.contains("429", true) || message.contains("rate limit", true) ->
+                "The provider is rate limiting this device. The agent will retry; try again in a moment."
+            message.contains("quota", true) -> "The provider account has no quota left for this request."
             message.isBlank() -> "The real Claude Code runtime could not start."
             else -> message.take(500)
         }
