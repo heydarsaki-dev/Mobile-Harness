@@ -96,6 +96,122 @@ internal object ProviderRuntimeErrorDetector {
     }
 }
 
+/**
+ * Reads Claude Code's terminal `result` event.
+ *
+ * The error text used to be read from `result`, but `result` carries the *success*
+ * payload. On an error result Claude Code leaves it empty and writes the reason to
+ * `errors` instead, optionally naming a machine-readable `startup_failure_reason`.
+ * Reading the wrong field is why the app could only ever say "Claude Code reported
+ * an error" and threw the actual cause away.
+ *
+ * `subtype` and `terminal_reason` are also what separate a limit from a failure.
+ * The limits leave the conversation and the workspace untouched, so the turn ends
+ * normally and the next prompt continues; only a genuine failure ends the session.
+ */
+internal object ClaudeResultEvent {
+
+    /** A limit outcome: reported to the user, but not a failure. */
+    data class Recoverable(val title: String, val detail: String)
+
+    /** Startup failures that Claude Code names with a fixed code. */
+    private val STARTUP_FAILURES = mapOf(
+        "org_pin_api_key_conflict" to "The provider account pins a different API key than the one saved here.",
+        "provider_not_allowed" to "This provider is not allowed for the signed-in account.",
+        "org_verify_failed" to "The provider account failed verification.",
+        "org_pin_mismatch" to "The provider account key pin does not match the saved key.",
+        "managed_settings_invalid" to "The managed settings for this provider are invalid.",
+        "remote_settings_required_unavailable" to "Required remote settings could not be fetched.",
+        "gateway_signin_required" to "The provider gateway needs a sign-in before it will accept requests.",
+        "gateway_access_denied" to "The provider gateway denied access.",
+        "proxy_invalid" to "The proxy configuration for this provider is invalid.",
+        "temp_dir_unusable" to "The runtime temp folder is unusable inside the sandbox.",
+        "cwd_unavailable" to "The project working folder is unavailable inside the sandbox.",
+        "shell_tool_missing" to "The runtime has no usable shell tool.",
+        "session_held_by_background" to "A background worker is still holding this session.",
+        "worktree_resume_refused" to "The runtime refused to resume this worktree.",
+        "worktree_unverified" to "The runtime could not verify the worktree.",
+        "cli_version_too_old" to "The bundled Claude Code runtime is too old for this provider.",
+        "bypass_root" to "The runtime refused to run with the bypass-root flag.",
+    )
+
+    private fun errors(json: JSONObject): List<String> {
+        val array = json.optJSONArray("errors") ?: return emptyList()
+        return (0 until array.length()).mapNotNull { index ->
+            array.optString(index).takeIf { it.isNotBlank() }
+        }
+    }
+
+    /**
+     * The limit outcomes that must not end the session, or null when the turn
+     * really failed and the caller should report it.
+     */
+    fun outcome(json: JSONObject): Recoverable? {
+        val subtype = json.optString("subtype")
+        val terminal = json.optString("terminal_reason")
+        return when {
+            subtype == "error_max_turns" || terminal == "max_turns" -> Recoverable(
+                "Reached the turn limit",
+                "Claude stopped after using its turn budget for this step. " +
+                    "The work so far is saved. Send the next instruction to carry on.",
+            )
+            subtype == "error_max_budget_usd" || terminal == "budget_exhausted" -> Recoverable(
+                "Reached the budget limit",
+                "Claude stopped because this step used its whole spend budget. " +
+                    "The work so far is saved. Send the next instruction to carry on.",
+            )
+            subtype == "error_max_structured_output_retries" ||
+                terminal == "structured_output_retry_exhausted" -> Recoverable(
+                "Could not produce structured output",
+                "Claude retried this step too many times without valid output. " +
+                    "Send the next instruction to try a different approach.",
+            )
+            terminal == "tool_deferred" || terminal == "tool_deferred_unavailable" -> Recoverable(
+                "Step deferred",
+                "Claude set this work aside to run later. Send the next instruction to carry on.",
+            )
+            else -> null
+        }
+    }
+
+    /** A readable message for a genuine failure, naming the real cause. */
+    fun describe(json: JSONObject): String {
+        val startup = json.optString("startup_failure_reason")
+            .takeIf { it.isNotBlank() }
+            ?.let { STARTUP_FAILURES[it] ?: "The runtime could not start: $it." }
+
+        val fromErrors = errors(json).joinToString(" ").trim()
+        // `result` is the success payload, but older builds still put a short error
+        // there, so it stays as a last resort rather than the first place to look.
+        val fromResult = json.optString("result").trim()
+
+        val detail = fromErrors.ifBlank { fromResult }
+        val named = startup?.let { listOf(it, detail) }?.filter { it.isNotBlank() }?.joinToString(" ")
+            ?: detail
+
+        return named
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .take(500)
+            .ifBlank { fallbackWithCodes(json) }
+    }
+
+    /**
+     * Last resort when a failure carries no prose at all. The codes still identify
+     * the failure, and naming them beats a sentence that explains nothing.
+     */
+    private fun fallbackWithCodes(json: JSONObject): String {
+        val subtype = json.optString("subtype").takeIf { it.isNotBlank() }
+        val terminal = json.optString("terminal_reason").takeIf { it.isNotBlank() }
+        val codes = listOfNotNull(subtype, terminal).joinToString(", ")
+        return if (codes.isBlank()) {
+            "Claude Code reported an error with no details."
+        } else {
+            "Claude Code reported an error ($codes)."
+        }
+    }
+}
+
 class ClaudeRuntimeBridge(
     private val context: Context,
     private val secretFor: (ProviderProfile) -> String?,
@@ -540,8 +656,13 @@ class ClaudeRuntimeBridge(
             }
             "result" -> {
                 if (json.optBoolean("is_error")) {
-                    val message = json.optString("result").ifBlank { "Claude Code reported an error" }
-                    throw IllegalStateException(message)
+                    // A limit outcome is not a failure. error_max_turns only means the
+                    // agent used its turn budget for this turn; the conversation and
+                    // workspace are intact, so killing the session here forced a manual
+                    // "continue" for something that resumes on the next prompt.
+                    val recoverable = ClaudeResultEvent.outcome(json)
+                        ?: throw IllegalStateException(ClaudeResultEvent.describe(json))
+                    eventBus.emit(RuntimeEvent.RuntimeLog(sessionId, recoverable.title, recoverable.detail))
                 }
                 // The structured result is Claude Code's authoritative terminal event.
                 // Update the UI immediately instead of waiting for a PRoot/Node wrapper
