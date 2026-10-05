@@ -212,6 +212,54 @@ internal object ClaudeResultEvent {
     }
 }
 
+/**
+ * Per-turn budget for one `claude -p` run.
+ *
+ * Every tool call consumes a turn, so the old limit of 25 stopped an agent that
+ * was writing and running scripts part-way through and forced the user to send
+ * "continue". A run that is allowed to finish needs room for a real task.
+ */
+internal const val CLAUDE_MAX_TURNS = 120
+
+/** How many times one user message may resume a run that stopped on its turn limit. */
+internal const val CLAUDE_MAX_AUTO_CONTINUES = 3
+
+/**
+ * Sent when a run is resumed. The transcript already holds the task and the work
+ * done so far, so it only needs to be told to carry on.
+ */
+private const val CONTINUE_PROMPT = "Continue the task from where you stopped."
+
+/**
+ * The command for one agent run, kept separate so the argument list is covered by
+ * tests. [resumeSessionId] continues the run Claude Code already has in its
+ * transcript instead of starting over from the prompt alone.
+ */
+internal fun claudeCommand(
+    executable: String,
+    model: String,
+    prompt: String,
+    resumeSessionId: String? = null,
+    maxTurns: Int = CLAUDE_MAX_TURNS,
+): List<String> = buildList {
+    add(executable)
+    add("--bare")
+    add("-p")
+    add(prompt)
+    add("--output-format")
+    add("stream-json")
+    add("--include-partial-messages")
+    add("--verbose")
+    add("--model")
+    add(model)
+    add("--max-turns")
+    add(maxTurns.toString())
+    resumeSessionId?.takeIf { it.isNotBlank() }?.let {
+        add("--resume")
+        add(it)
+    }
+}
+
 class ClaudeRuntimeBridge(
     private val context: Context,
     private val secretFor: (ProviderProfile) -> String?,
@@ -237,6 +285,10 @@ class ClaudeRuntimeBridge(
     private var lastReasoningUpdateAt = 0L
     private var lastThinkingUpdateAt = 0L
     private var currentThinkingBlockId = 0L
+    /** Claude Code's own session UUID, used to resume a run that stopped on its limit. */
+    @Volatile private var claudeSessionId: String? = null
+    /** Set when the run ended on a turn/budget limit rather than finishing or failing. */
+    @Volatile private var turnEndedOnLimit = false
 
     override suspend fun startSession(projectId: String, projectSlug: String, projectKind: ProjectKind, prompt: String, conversationHistory: List<ChatMessage>, provider: ProviderProfile): String = withContext(Dispatchers.IO + NonCancellable) {
         val sessionId = UUID.randomUUID().toString()
@@ -253,6 +305,8 @@ class ClaudeRuntimeBridge(
         lastReasoningUpdateAt = 0L
         lastThinkingUpdateAt = 0L
         currentThinkingBlockId = 0L
+        claudeSessionId = null
+        turnEndedOnLimit = false
         streamedThinking.clear()
         eventBus.emit(RuntimeEvent.SessionStarted(sessionId))
         pushForegroundProgress("Starting Claude Code…")
@@ -309,30 +363,32 @@ class ClaudeRuntimeBridge(
             val guestWorkspacePath = "/workspace/$projectSlug"
             val contextPrompt = buildContextPrompt(prompt, conversationHistory, guestWorkspacePath, projectKind)
 
-            val command = buildList {
-                add(launch.executable)
-                add("--bare")
-                add("-p")
-                add(contextPrompt)
-                add("--output-format")
-                add("stream-json")
-                add("--include-partial-messages")
-                add("--verbose")
-                add("--model")
-                add(launch.environment["ANTHROPIC_MODEL"] ?: provider.model)
-                add("--max-turns")
-                add("25")
-            }
-            Log.d("ClaudeBridge", "Launching command: $command")
-            val process = installer.process(
-                installed.proot,
-                installed.rootfs,
-                workspace,
-                launch.environment,
-                command,
-                guestWorkspacePath = guestWorkspacePath,
-            )
-            activeProcess = process
+            // A run that stops on its turn limit has not failed and the workspace is
+            // intact, so the same user message is resumed under Claude Code's own
+            // session instead of handing the turn back and making the user type
+            // "continue". Bounded so a genuinely stuck task still stops.
+            var runPrompt = contextPrompt
+            var resumeSessionId: String? = null
+            var autoContinues = 0
+            var stopAfterRun = false
+            while (!stopAfterRun) {
+                turnEndedOnLimit = false
+                val command = claudeCommand(
+                    executable = launch.executable,
+                    model = launch.environment["ANTHROPIC_MODEL"] ?: provider.model,
+                    prompt = runPrompt,
+                    resumeSessionId = resumeSessionId,
+                )
+                Log.d("ClaudeBridge", "Launching command: $command")
+                val process = installer.process(
+                    installed.proot,
+                    installed.rootfs,
+                    workspace,
+                    launch.environment,
+                    command,
+                    guestWorkspacePath = guestWorkspacePath,
+                )
+                activeProcess = process
             if (userStopRequested) process.destroy()
             coroutineScope {
                 val permissionWatcher = launch { watchPermissionRequests(sessionId) }
@@ -387,26 +443,49 @@ class ClaudeRuntimeBridge(
                     permission.response.writeText("deny")
                     pending.remove(permission.request.approvalId)
                 }
-                val changed = changedFiles(workspace, before)
-                if (changed.isNotEmpty()) {
-                    Log.d("ClaudeBridge", "Changed files: $changed")
-                    saveChangedPaths(projectId, changed)
-                    val details = loadPendingChanges(projectId)
-                    eventBus.emit(RuntimeEvent.FilesChanged(sessionId, details))
-                } else if (!File(checkpointDir(projectId), "changes.json").isFile) {
-                    acceptLastChanges(projectId)
-                }
-                if (exit == 0) {
-                    emitCompletedOnce(sessionId)
-                    finishForegroundRuntime(
-                        completed = true,
-                        projectName = projectSlug,
-                        detail = "Claude Code finished the task in $projectSlug.",
-                    )
+                val resumable = turnEndedOnLimit &&
+                    !userStopRequested &&
+                    autoContinues < CLAUDE_MAX_AUTO_CONTINUES &&
+                    !claudeSessionId.isNullOrBlank()
+                if (resumable) {
+                    autoContinues += 1
+                    resumeSessionId = claudeSessionId
+                    runPrompt = CONTINUE_PROMPT
+                    Log.d("ClaudeBridge", "Turn limit reached, resuming run $autoContinues of $CLAUDE_MAX_AUTO_CONTINUES")
+                    pushForegroundProgress("Continuing (${autoContinues}/$CLAUDE_MAX_AUTO_CONTINUES)…")
                 } else {
-                    if (userStopRequested) throw ProviderSessionException("Stopped by user")
-                    error(lastDiagnostic.ifBlank { "Claude Code stopped with exit code $exit" })
+                    stopAfterRun = true
+                    if (turnEndedOnLimit && autoContinues >= CLAUDE_MAX_AUTO_CONTINUES) {
+                        eventBus.emit(
+                            RuntimeEvent.RuntimeLog(
+                                sessionId,
+                                "Reached the turn limit",
+                                "Claude stopped after its last automatic continue. Send the next instruction to carry on.",
+                            ),
+                        )
+                    }
+                    val changed = changedFiles(workspace, before)
+                    if (changed.isNotEmpty()) {
+                        Log.d("ClaudeBridge", "Changed files: $changed")
+                        saveChangedPaths(projectId, changed)
+                        val details = loadPendingChanges(projectId)
+                        eventBus.emit(RuntimeEvent.FilesChanged(sessionId, details))
+                    } else if (!File(checkpointDir(projectId), "changes.json").isFile) {
+                        acceptLastChanges(projectId)
+                    }
+                    if (exit == 0) {
+                        emitCompletedOnce(sessionId)
+                        finishForegroundRuntime(
+                            completed = true,
+                            projectName = projectSlug,
+                            detail = "Claude Code finished the task in $projectSlug.",
+                        )
+                    } else {
+                        if (userStopRequested) throw ProviderSessionException("Stopped by user")
+                        error(lastDiagnostic.ifBlank { "Claude Code stopped with exit code $exit" })
+                    }
                 }
+            }
             }
         }.onFailure { error ->
             Log.e("ClaudeBridge", "Session failed", error)
@@ -561,7 +640,8 @@ class ClaudeRuntimeBridge(
         when (json.optString("type")) {
             "stream_event" -> json.optJSONObject("event")?.let { consumeClaudeJsonEvent(sessionId, it) }
             "system" -> when (json.optString("subtype")) {
-                "init" -> Unit
+                // The init frame carries the session UUID that --resume continues.
+                "init" -> json.optString("session_id").takeIf { it.isNotBlank() }?.let { claudeSessionId = it }
                 "thinking_tokens" -> emitReasoningProgress(sessionId, json.optInt("estimated_tokens"))
                 "permission_denied" -> eventBus.emit(
                     RuntimeEvent.RuntimeLog(
@@ -655,14 +735,18 @@ class ClaudeRuntimeBridge(
                 }
             }
             "result" -> {
+                json.optString("session_id").takeIf { it.isNotBlank() }?.let { claudeSessionId = it }
                 if (json.optBoolean("is_error")) {
-                    // A limit outcome is not a failure. error_max_turns only means the
-                    // agent used its turn budget for this turn; the conversation and
-                    // workspace are intact, so killing the session here forced a manual
-                    // "continue" for something that resumes on the next prompt.
-                    val recoverable = ClaudeResultEvent.outcome(json)
-                        ?: throw IllegalStateException(ClaudeResultEvent.describe(json))
-                    eventBus.emit(RuntimeEvent.RuntimeLog(sessionId, recoverable.title, recoverable.detail))
+                    val outcome = ClaudeResultEvent.outcome(json)
+                    if (outcome != null) {
+                        // A limit stopped the run; it did not fail it. Completing here
+                        // would end the session the auto-continue loop is about to
+                        // resume, so the loop is left to decide instead.
+                        turnEndedOnLimit = true
+                        eventBus.emit(RuntimeEvent.RuntimeLog(sessionId, outcome.title, outcome.detail))
+                        return
+                    }
+                    throw IllegalStateException(ClaudeResultEvent.describe(json))
                 }
                 // The structured result is Claude Code's authoritative terminal event.
                 // Update the UI immediately instead of waiting for a PRoot/Node wrapper
