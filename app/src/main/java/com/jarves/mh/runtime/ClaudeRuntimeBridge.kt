@@ -231,6 +231,44 @@ internal const val CLAUDE_MAX_AUTO_CONTINUES = 3
 private const val CONTINUE_PROMPT = "Continue the task from where you stopped."
 
 /**
+ * How often one identical tool call has to repeat before the run counts as stuck.
+ * Re-reading a file or re-running a build twice is normal; doing it over and over
+ * is the loop that burns the budget.
+ */
+internal const val TOOL_LOOP_REPEAT_THRESHOLD = 6
+
+/**
+ * Counts how often the same tool ran the same thing during one user message.
+ *
+ * A run that burns its whole turn budget almost always burned it repeating one
+ * step, usually a command that keeps failing. Counting it turns "it stopped"
+ * into the one thing worth acting on, and stops the auto-continue from paying for
+ * the same dead end several more times.
+ */
+internal class ToolStepTracker(private val threshold: Int = TOOL_LOOP_REPEAT_THRESHOLD) {
+    private val counts = mutableMapOf<String, Int>()
+
+    fun record(name: String, detail: String) {
+        val step = "$name ${detail.replace(Regex("\\s+"), " ").trim()}".trim().take(200)
+        if (step.isBlank()) return
+        counts[step] = (counts[step] ?: 0) + 1
+    }
+
+    /** The most repeated step once it passes the threshold, or null when none has. */
+    fun repeated(): Pair<String, Int>? = counts.entries
+        .filter { it.value >= threshold }
+        .maxByOrNull { it.value }
+        ?.let { it.key to it.value }
+
+    /** Null while the agent is still trying new things. */
+    fun isStuck(): Boolean = repeated() != null
+
+    fun total(): Int = counts.values.sum()
+
+    fun clear() = counts.clear()
+}
+
+/**
  * The command for one agent run, kept separate so the argument list is covered by
  * tests. [resumeSessionId] continues the run Claude Code already has in its
  * transcript instead of starting over from the prompt alone.
@@ -289,6 +327,8 @@ class ClaudeRuntimeBridge(
     @Volatile private var claudeSessionId: String? = null
     /** Set when the run ended on a turn/budget limit rather than finishing or failing. */
     @Volatile private var turnEndedOnLimit = false
+    /** How often each tool ran each thing this user message, used to spot a loop. */
+    private val toolStepTracker = ToolStepTracker()
 
     override suspend fun startSession(projectId: String, projectSlug: String, projectKind: ProjectKind, prompt: String, conversationHistory: List<ChatMessage>, provider: ProviderProfile): String = withContext(Dispatchers.IO + NonCancellable) {
         val sessionId = UUID.randomUUID().toString()
@@ -307,6 +347,7 @@ class ClaudeRuntimeBridge(
         currentThinkingBlockId = 0L
         claudeSessionId = null
         turnEndedOnLimit = false
+        toolStepTracker.clear()
         streamedThinking.clear()
         eventBus.emit(RuntimeEvent.SessionStarted(sessionId))
         pushForegroundProgress("Starting Claude Code…")
@@ -443,8 +484,14 @@ class ClaudeRuntimeBridge(
                     permission.response.writeText("deny")
                     pending.remove(permission.request.approvalId)
                 }
+                val repeated = toolStepTracker.repeated()
+                val madeProgress = repeated == null
+                // Resuming only pays off while the agent is still doing new things.
+                // Repeating one step means it is stuck, and resuming would spend the
+                // rest of the budget reaching the same dead end again.
                 val resumable = turnEndedOnLimit &&
                     !userStopRequested &&
+                    madeProgress &&
                     autoContinues < CLAUDE_MAX_AUTO_CONTINUES &&
                     !claudeSessionId.isNullOrBlank()
                 if (resumable) {
@@ -455,12 +502,25 @@ class ClaudeRuntimeBridge(
                     pushForegroundProgress("Continuing (${autoContinues}/$CLAUDE_MAX_AUTO_CONTINUES)…")
                 } else {
                     stopAfterRun = true
-                    if (turnEndedOnLimit && autoContinues >= CLAUDE_MAX_AUTO_CONTINUES) {
+                    if (turnEndedOnLimit && !madeProgress) {
+                        // Name the step instead of the budget: this is the one thing
+                        // the user can act on.
+                        val step = repeated!!.first
+                        eventBus.emit(
+                            RuntimeEvent.RuntimeLog(
+                                sessionId,
+                                "Stopped repeating one step",
+                                "Claude ran the same thing ${repeated.second} times and stopped making progress: $step. " +
+                                    "Fix or change that step, then send the next instruction.",
+                            ),
+                        )
+                    } else if (turnEndedOnLimit && autoContinues >= CLAUDE_MAX_AUTO_CONTINUES) {
                         eventBus.emit(
                             RuntimeEvent.RuntimeLog(
                                 sessionId,
                                 "Reached the turn limit",
-                                "Claude stopped after its last automatic continue. Send the next instruction to carry on.",
+                                "Claude used its turn budget and kept making progress, but this message is " +
+                                    "already long (${toolStepTracker.total()} steps). Send the next instruction to carry on.",
                             ),
                         )
                     }
@@ -808,10 +868,10 @@ class ClaudeRuntimeBridge(
             }
             else -> input.optString("description").ifBlank { "Running $name" }
         }
+        toolStepTracker.record(name, detail)
         eventBus.emit(RuntimeEvent.ToolStarted(sessionId, name, sanitizeForDisplay(detail.ifBlank { "Running $name" })))
         pushForegroundProgress("Running $name · ${detail.replace(Regex("\\s+"), " ").trim().take(80).ifBlank { name }}")
     }
-
     private fun terminalStatus(line: String): Pair<String, String>? = null
 
     private suspend fun emitCompletedOnce(sessionId: String) {
